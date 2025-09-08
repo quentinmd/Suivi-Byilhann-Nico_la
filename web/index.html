@@ -18,6 +18,12 @@
     .info-box h2 { margin:0 0 6px; font-size:15px; }
     .twitch-live { color:#d40089; font-weight:600; }
     .twitch-off { color:#666; }
+  .next-dest { position:absolute; left:10px; right:10px; bottom:10px; background:#ffffffd9; backdrop-filter: blur(4px); padding:10px 12px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.2); z-index:1000; }
+  .next-dest .row { display:flex; gap:8px; align-items:baseline; font-size:14px; }
+  .next-dest .bar-wrap { margin-top:6px; }
+  .next-dest .bar { height:10px; background:#e9ecef; border-radius:6px; overflow:hidden; position:relative; }
+  .next-dest .bar .fill { height:100%; background:#2a9d8f; width:0%; transition: width .6s ease; }
+  .next-dest .km-label { text-align:center; font-size:12px; color:#333; margin-bottom:6px; }
   </style>
 </head>
 <body>
@@ -28,6 +34,13 @@
     <div id="startInfo">Chargement...</div>
     <hr style="margin:8px 0">
     <div id="twitchStatus">Twitch: chargement...</div>
+  </div>
+  <div class="next-dest" id="nextDest" style="display:none">
+    <div class="row"><strong>Prochaine destination :</strong> <span id="nextCity">—</span></div>
+    <div class="bar-wrap">
+      <div class="km-label"><span id="nextKm">—</span> restants</div>
+      <div class="bar"><div class="fill" id="nextFill"></div></div>
+    </div>
   </div>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
@@ -66,6 +79,9 @@
     }).addTo(map);
 
   const state = { positions: [], route: [], polyline: null, marker: null, plannedLine: null, startMarker: null, lastCount: 0, initialFitted: false, startTime: null, totalKm: 0 };
+  const MAJOR_CITIES = new Set([
+    'Montpellier (Radisson Blu)','Nîmes','Avignon','Orange','Montélimar','Valence','Vienne','Lyon','Mâcon','Chalon-sur-Saône','Beaune','Dijon','Sens','Fontainebleau','Melun','Paris (Arrivée)'
+  ]);
 
     async function safeFetchJson(url){
       const res = await fetch(url, {headers:{'Accept':'application/json'}});
@@ -120,6 +136,43 @@
     }
     function computeDistance(){
       let d=0; for(let i=1;i<state.positions.length;i++){ const A=state.positions[i-1], B=state.positions[i]; d+=haversine(A.lat,A.lng,B.lat,B.lng);} state.totalKm=d; }
+    function routeDistance(iStart, iEnd){
+      if(!state.route.length) return 0;
+      const a = Math.max(0, Math.min(iStart, iEnd));
+      const b = Math.max(0, Math.max(iStart, iEnd));
+      let d=0; for(let i=a+1;i<=b;i++){ const A=state.route[i-1], B=state.route[i]; d += haversine(A.lat,A.lng,B.lat,B.lng);} return d;
+    }
+    function findNearestRouteIndex(lat,lng){
+      let bestI=0, bestD=Infinity; for(let i=0;i<state.route.length;i++){ const r=state.route[i]; const dd=haversine(lat,lng,r.lat,r.lng); if(dd<bestD){ bestD=dd; bestI=i; } } return bestI;
+    }
+    function findPrevNextMajors(fromIdx){
+      let prev = null, next = null;
+      for(let i=fromIdx;i>=0;i--){ if(MAJOR_CITIES.has(state.route[i].name)){ prev = i; break; } }
+      for(let i=fromIdx+1;i<state.route.length;i++){ if(MAJOR_CITIES.has(state.route[i].name)){ next = i; break; } }
+      if(next==null){ // fallback sur dernière étape
+        for(let i=state.route.length-1;i>=0;i--){ if(MAJOR_CITIES.has(state.route[i].name)){ next=i; break; } }
+      }
+      return {prev, next};
+    }
+    function updateNextDestination(){
+      const box = document.getElementById('nextDest');
+      if(!state.route.length || state.positions.length===0){ box.style.display='none'; return; }
+      const last = state.positions[state.positions.length-1];
+      const idx = findNearestRouteIndex(last.lat,last.lng);
+      const {prev, next} = findPrevNextMajors(idx);
+      if(next==null){ box.style.display='none'; return; }
+      const nextCity = state.route[next].name;
+      const prevIdx = (prev!=null)? prev : 0;
+      const segTotal = routeDistance(prevIdx, next);
+      let segDone = routeDistance(prevIdx, idx) + haversine(state.route[idx].lat, state.route[idx].lng, last.lat, last.lng);
+      segDone = Math.max(0, Math.min(segTotal, segDone));
+      const remain = Math.max(0, segTotal - segDone);
+      const pct = segTotal>0 ? Math.round((segDone/segTotal)*100) : 0;
+      document.getElementById('nextCity').textContent = nextCity;
+      document.getElementById('nextKm').textContent = `${remain.toFixed(1)} km`;
+      document.getElementById('nextFill').style.width = pct + '%';
+      box.style.display = 'block';
+    }
     function updateLegendDynamic(){
       if(!state.startTime) return; const startDate=new Date(state.startTime); const now=new Date();
       const diffStr = formatDHm(now - startDate);
@@ -140,6 +193,7 @@
           if(last) map.panTo([last.lat, last.lng], {animate:true, duration:0.8});
         }
         updateLegendDynamic();
+  updateNextDestination();
       } catch(e) {
         console.warn('Erreur refresh positions', e);
       }
@@ -173,6 +227,7 @@
         <small>Mise à jour auto toutes les 30s.</small>`;
       document.getElementById('startInfo').innerHTML = `${start.start_place || ''}<br>${startDate.toLocaleString('fr-FR')}`;
       await refresh();
+  updateNextDestination();
       // Si on n'a pas encore pu fitter (pas assez de points) on tente un fit départ + première étape du parcours planifié
       if(!state.initialFitted) {
         const extra = [];
