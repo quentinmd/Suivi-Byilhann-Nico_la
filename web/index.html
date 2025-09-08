@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Suivi - Byilhann & Nico_la</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body { margin:0; padding:0; height:100%; font-family: system-ui, Arial, sans-serif; }
+    #map { width:100%; height:100%; }
+    .legend {
+      position: absolute;
+      top: 10px; left: 10px; background:#fff; padding:8px 12px; border-radius:6px; box-shadow:0 2px 6px rgba(0,0,0,.15); font-size:14px; z-index:1000;
+    }
+    .legend h1 { margin:0 0 6px; font-size:16px; }
+    .legend small { color:#555; }
+  .info-box { position:absolute; top:10px; right:10px; background:#ffffffd9; backdrop-filter: blur(4px); padding:10px 14px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.2); max-width:240px; font-size:13px; line-height:1.35; z-index:1000; }
+    .info-box h2 { margin:0 0 6px; font-size:15px; }
+    .twitch-live { color:#d40089; font-weight:600; }
+    .twitch-off { color:#666; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="legend" id="legend"></div>
+  <div class="info-box" id="infoBox">
+    <h2>Départ</h2>
+    <div id="startInfo">Chargement...</div>
+    <hr style="margin:8px 0">
+    <div id="twitchStatus">Twitch: chargement...</div>
+  </div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+  // Base API dynamique:
+  // - Dev local: localhost, 127.0.0.1, réseau local (192.168.*) ou port 5173 => on cible le backend sur le même host port 4000
+  // - Prod (avec reverse proxy / même domaine) => chaîne vide (chemins relatifs)
+  const isLocalNet = /^192\.168\./.test(location.hostname);
+  const isDev = isLocalNet || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.port === '5173';
+  const API_BASE = isDev ? `${location.protocol}//${location.hostname}:4000` : '';
+    const map = L.map('map').setView([43.604482, 3.881177], 8); // around Montpellier
+    L.tileLayer('https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+  const state = { positions: [], route: [], polyline: null, marker: null, plannedLine: null, startMarker: null, lastCount: 0, initialFitted: false, startTime: null, totalKm: 0 };
+
+    async function fetchStart() {
+      const res = await fetch(`${API_BASE}/api/start`);
+      return res.json();
+    }
+  async function fetchPositions() { const res = await fetch(`${API_BASE}/api/positions`); return res.json(); }
+  async function fetchRoute() { const res = await fetch(`${API_BASE}/api/route`); return res.json(); }
+
+    function updateMap() {
+      // Parcours planifié (gris pointillé)
+      if(state.route.length) {
+        const plannedLatLngs = state.route.map(r=>[r.lat, r.lng]);
+        if(!state.plannedLine) {
+          state.plannedLine = L.polyline(plannedLatLngs, {color:'#777', dashArray:'4,6', weight:3}).addTo(map);
+        } else {
+          state.plannedLine.setLatLngs(plannedLatLngs);
+        }
+      }
+      // Positions réelles
+  // Les positions arrivent déjà ordonnées (id ASC)
+  const latlngs = state.positions.map(p=>[p.lat,p.lng]);
+      if(latlngs.length) {
+        if(!state.polyline) {
+          state.polyline = L.polyline(latlngs, {color:'#e63946', weight:5, lineJoin:'round'}).addTo(map);
+        } else {
+          state.polyline.setLatLngs(latlngs);
+        }
+        const last = latlngs[latlngs.length-1];
+        if(!state.marker) {
+          state.marker = L.marker(last).addTo(map).bindPopup('Equipe position actuelle').openPopup();
+        } else { state.marker.setLatLng(last); }
+        // Ajuster la vue initiale une seule fois quand on a au moins 2 points
+        if(!state.initialFitted && latlngs.length >= 2) {
+          try {
+            const b = L.latLngBounds(latlngs);
+            map.fitBounds(b.pad(0.15), {animate:true});
+            state.initialFitted = true;
+          } catch(_){}
+        }
+      }
+    }
+
+    function haversine(lat1, lon1, lat2, lon2){
+      const R = 6371; const toRad = d => d*Math.PI/180;
+      const dLat = toRad(lat2-lat1), dLon = toRad(lon2-lon1);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+      return 2*R*Math.asin(Math.sqrt(a));
+    }
+    function computeDistance(){
+      let d=0; for(let i=1;i<state.positions.length;i++){ const A=state.positions[i-1], B=state.positions[i]; d+=haversine(A.lat,A.lng,B.lat,B.lng);} state.totalKm=d; }
+    function updateLegendDynamic(){
+      if(!state.startTime) return; const startDate=new Date(state.startTime); const now=new Date();
+      const diffHrs = ((now - startDate)/3600000).toFixed(1);
+      const hoursEl = document.querySelector('[data-hours]'); if(hoursEl) hoursEl.textContent = diffHrs + ' h';
+      const distEl = document.querySelector('[data-distance]'); if(distEl) distEl.textContent = state.totalKm.toFixed(1) + ' km';
+    }
+    async function refresh() {
+      try {
+        const data = await fetchPositions();
+        const grew = data.length > state.lastCount;
+        state.positions = data;
+        state.lastCount = data.length;
+        computeDistance();
+        updateMap();
+        if(grew && state.initialFitted && state.polyline) {
+          // Ajuster légèrement le centre vers le dernier point sans changer trop le zoom
+          const last = state.positions[state.positions.length-1];
+          if(last) map.panTo([last.lat, last.lng], {animate:true, duration:0.8});
+        }
+        updateLegendDynamic();
+      } catch(e) {
+        console.warn('Erreur refresh positions', e);
+      }
+    }
+
+    async function init() {
+      const [start, route] = await Promise.all([fetchStart(), fetchRoute()]);
+      state.route = route;
+      if(start.start_lat && start.start_lng) {
+        const slat = parseFloat(start.start_lat), slng = parseFloat(start.start_lng);
+        if(!state.startMarker) {
+          state.startMarker = L.marker([slat, slng], {title:'Départ'}).addTo(map).bindPopup('Départ');
+        }
+      }
+      const startDate = new Date(start.start_time);
+      const now = new Date();
+      const diffHrs = ((now - startDate)/3600000).toFixed(1);
+      state.startTime = start.start_time;
+      document.getElementById('legend').innerHTML = `<h1>Suivi</h1>
+        <div><strong>Heures écoulées :</strong> <span data-hours>${diffHrs} h</span></div>
+        <div><strong>Distance :</strong> <span data-distance>0.0 km</span></div>
+        <div><strong>Arrivée prévue :</strong> Paris</div>
+        <div style="margin-top:6px"><span style="display:inline-block;width:14px;height:4px;background:#e63946;vertical-align:middle;margin-right:4px"></span>Parcours réel<br><span style="display:inline-block;width:14px;height:4px;background:#777;vertical-align:middle;margin-right:4px;border-bottom:2px dashed #777"></span>Parcours planifié</div>
+        <small>Mise à jour auto toutes les 30s.</small>`;
+      document.getElementById('startInfo').innerHTML = `${start.start_place || ''}<br>${startDate.toLocaleString('fr-FR')}`;
+      await refresh();
+      // Si on n'a pas encore pu fitter (pas assez de points) on tente un fit départ + première étape du parcours planifié
+      if(!state.initialFitted) {
+        const extra = [];
+        if(start.start_lat && start.start_lng) extra.push([parseFloat(start.start_lat), parseFloat(start.start_lng)]);
+        if(state.route.length) extra.push([state.route[0].lat, state.route[0].lng]);
+        if(extra.length >= 2) {
+          try { map.fitBounds(L.latLngBounds(extra).pad(0.3)); } catch(_){}
+        } else if(extra.length === 1) {
+          map.setView(extra[0], 9);
+        }
+      }
+      // Corriger potentiels glitchs de rendu après animations
+      setTimeout(()=> map.invalidateSize(), 400);
+      setInterval(refresh, 30000);
+      // Twitch status refresh
+      async function updateTwitch(){
+        try {
+          const r = await fetch(`${API_BASE}/api/twitch-status`);
+          const j = await r.json();
+          if(j.live){
+            document.getElementById('twitchStatus').innerHTML = `<span class="twitch-live">LIVE</span> ${j.viewers ?? ''} viewers`;
+          } else {
+            document.getElementById('twitchStatus').innerHTML = `<span class="twitch-off">Hors ligne</span>`;
+          }
+        } catch(e){ document.getElementById('twitchStatus').textContent = 'Twitch indisponible'; }
+      }
+      updateTwitch();
+      setInterval(updateTwitch, 60000);
+    }
+
+    init();
+  </script>
+</body>
+</html>
