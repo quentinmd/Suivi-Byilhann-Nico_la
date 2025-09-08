@@ -1,0 +1,11 @@
+{
+  "name": "byilhann-nicola-tracker-web",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "serve": "npx http-server -p 5173 ."
+  },
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}

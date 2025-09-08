@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Admin Suivi</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 40px; max-width: 760px; }
+    form { display:grid; gap:12px; }
+    fieldset { margin:0; }
+    input, select { padding:8px; font-size:16px; }
+    button { padding:10px 14px; cursor:pointer; font-size:16px; background:#1d3557; color:#fff; border:none; border-radius:4px; }
+    button:disabled { opacity:.5; }
+    .log { margin-top:30px; font-size:14px; max-height:320px; overflow:auto; background:#fafafa; border:1px solid #ddd; padding:10px; }
+    h1 { margin-top:0; }
+    .two { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    #secured { opacity:0; transition:opacity .4s ease; }
+    #secured.active { opacity:1; }
+  </style>
+</head>
+<body>
+  <h1>Admin - Suivi Montpellier -> Paris</h1>
+  <p>Connectez-vous avec le code admin puis ajoutez des points (coordonnées + date/heure ou lieu planifié) et les heures d'arrivée.</p>
+
+  <form id="loginForm" autocomplete="off">
+    <fieldset style="border:1px solid #ccc;padding:12px">
+      <legend>Connexion</legend>
+      <label>Code admin
+        <input type="password" id="loginCode" required placeholder="Code" />
+      </label>
+      <button type="submit">Entrer</button>
+      <span id="loginStatus" style="margin-left:12px;font-size:14px"></span>
+    </fieldset>
+  </form>
+
+  <div id="secured" style="display:none">
+    <form id="posForm">
+      <fieldset style="border:1px solid #ccc;padding:12px">
+        <legend>Ajouter position (coordonnées + date/heure)</legend>
+        <div style="margin-bottom:6px;font-size:13px;color:#555">Vous pouvez aussi utiliser Coller direct: "lat,lng" dans le champ rapide.</div>
+        <div class="two">
+          <label>Rapide (lat,lng)
+            <input type="text" id="quickPair" placeholder="43.63409, 3.92195" />
+          </label>
+          <div style="display:flex;align-items:flex-end"><button id="quickBtn" type="button" style="background:#0d5c28">Ajouter rapide</button></div>
+        </div>
+        <div class="two">
+          <label>Latitude
+            <input type="number" step="0.000001" name="lat" required />
+          </label>
+          <label>Longitude
+            <input type="number" step="0.000001" name="lng" required />
+          </label>
+        </div>
+        <div class="two">
+          <label>Date (YYYY-MM-DD)
+            <input type="text" name="date" placeholder="2025-09-08" />
+          </label>
+          <label>Heure (HH:MM)
+            <input type="text" name="time" placeholder="16:15" />
+          </label>
+        </div>
+        <button type="submit">Enregistrer coordonnées</button>
+      </fieldset>
+    </form>
+
+    <form id="placeForm" style="margin-top:24px">
+      <fieldset style="border:1px solid #ccc;padding:12px">
+        <legend>Ajouter position (par lieu)</legend>
+        <label>Lieu (parcours)
+          <select name="name" id="placeSelect"></select>
+        </label>
+        <button type="submit">Enregistrer lieu</button>
+      </fieldset>
+    </form>
+
+    <form id="arrivalForm" style="margin-top:24px">
+      <fieldset style="border:1px solid #ccc;padding:12px">
+        <legend>Heure d'arrivée étape</legend>
+        <div class="two">
+          <label>Lieu
+            <select name="name" id="arrivalPlace"></select>
+          </label>
+          <label>Heure (HH:MM ou ISO)
+            <input type="text" name="time" placeholder="18:42" required />
+          </label>
+        </div>
+        <button type="submit">Enregistrer heure d'arrivée</button>
+      </fieldset>
+    </form>
+
+    <div class="log" id="log"></div>
+    <input type="hidden" id="adminCode" />
+    <section style="margin-top:32px">
+      <h2>Gestion des positions</h2>
+      <div style="font-size:13px;color:#555;margin-bottom:6px">Clique sur une ligne pour éditer. Sauvegarde avant de changer de ligne.</div>
+  <table id="posTable" style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead>
+          <tr style="background:#f0f0f0;text-align:left">
+            <th style="padding:4px;border:1px solid #ccc">ID</th>
+            <th style="padding:4px;border:1px solid #ccc">Lat</th>
+            <th style="padding:4px;border:1px solid #ccc">Lng</th>
+    <th style="padding:4px;border:1px solid #ccc">Date</th>
+    <th style="padding:4px;border:1px solid #ccc">Heure</th>
+            <th style="padding:4px;border:1px solid #ccc">Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <button id="refreshPositions" type="button" style="margin-top:8px">Rafraîchir</button>
+    </section>
+  </div>
+
+  <script>
+    const loginForm = document.getElementById('loginForm');
+    const loginCode = document.getElementById('loginCode');
+    const loginStatus = document.getElementById('loginStatus');
+    const secured = document.getElementById('secured');
+    const adminCodeInput = document.getElementById('adminCode');
+    const form = document.getElementById('posForm');
+    const placeForm = document.getElementById('placeForm');
+    const arrivalForm = document.getElementById('arrivalForm');
+    const log = document.getElementById('log');
+    const placeSelect = document.getElementById('placeSelect');
+    const arrivalPlace = document.getElementById('arrivalPlace');
+  const posTableBody = document.querySelector('#posTable tbody');
+  const refreshPositionsBtn = document.getElementById('refreshPositions');
+
+    function headers(extra={}) { return Object.assign({'Content-Type':'application/json','X-Admin-Code': adminCodeInput.value}, extra); }
+
+    async function loadRoute(){
+      const res = await fetch('http://localhost:4000/api/route');
+      const route = await res.json();
+      const options = route.map(r=>`<option value="${r.name}">${r.seq} - ${r.name}${r.arrival_time?' (✔)':''}</option>`).join('');
+      placeSelect.innerHTML = options;
+      arrivalPlace.innerHTML = options;
+    }
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      loginStatus.style.color = '#444';
+      loginStatus.textContent = 'Vérification...';
+      try {
+        const res = await fetch('http://localhost:4000/api/admin/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({code: loginCode.value})});
+        const j = await res.json();
+        if(j.ok) {
+          loginStatus.style.color = '#0a730a';
+          loginStatus.textContent = 'Accès accordé';
+          adminCodeInput.value = loginCode.value;
+          secured.style.display = 'block';
+          setTimeout(()=> secured.classList.add('active'), 50);
+          await loadRoute();
+        } else {
+          loginStatus.style.color = '#bb0000';
+          loginStatus.textContent = 'Code invalide';
+        }
+      } catch(err) {
+        loginStatus.style.color = '#bb0000';
+        loginStatus.textContent = 'Erreur serveur';
+      }
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form).entries());
+      if(!data.lat || !data.lng) { alert('Lat & Lng requis'); return; }
+      data.lat = parseFloat(data.lat); data.lng = parseFloat(data.lng);
+      const btn = form.querySelector('button'); btn.disabled = true;
+      try {
+        const res = await fetch('http://localhost:4000/api/positions', { method:'POST', headers: headers(), body: JSON.stringify(data) });
+        const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
+        log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Position (coords) OK${j.created_at? ' ('+ j.created_at +')':''}</div>` + log.innerHTML;
+        form.reset();
+      } catch(err) { alert(err.message); } finally { btn.disabled=false; }
+    });
+
+    placeForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(placeForm).entries());
+      const btn = placeForm.querySelector('button'); btn.disabled=true;
+      try {
+        const res = await fetch('http://localhost:4000/api/positions/by-place', { method:'POST', headers: headers(), body: JSON.stringify(data) });
+        const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
+        log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Position (lieu: ${data.name}) OK</div>` + log.innerHTML;
+      } catch(err) { alert(err.message); } finally { btn.disabled=false; }
+    });
+
+    arrivalForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(arrivalForm).entries());
+      const btn = arrivalForm.querySelector('button'); btn.disabled=true;
+      try {
+        const res = await fetch('http://localhost:4000/api/route/arrival', { method:'POST', headers: headers(), body: JSON.stringify(data) });
+        const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
+        log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Arrivée ${data.name} = ${j.arrival_time}</div>` + log.innerHTML;
+        loadRoute();
+      } catch(err) { alert(err.message); } finally { btn.disabled=false; }
+    });
+
+    async function loadPositionsList(){
+      const res = await fetch('http://localhost:4000/api/positions');
+      const list = await res.json();
+      posTableBody.innerHTML = list.map(p=>{
+        let dateStr = '', timeStr='';
+        if(p.created_at) {
+          const m = p.created_at.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+            if(m){ dateStr=m[1]; timeStr=m[2]; }
+        }
+        return `<tr data-id="${p.id}">
+          <td style="padding:4px;border:1px solid #ccc">${p.id}</td>
+          <td style="padding:0;border:1px solid #ccc"><input data-field="lat" value="${p.lat}" style="width:100%;border:0;padding:4px" /></td>
+          <td style="padding:0;border:1px solid #ccc"><input data-field="lng" value="${p.lng}" style="width:100%;border:0;padding:4px" /></td>
+          <td style="padding:0;border:1px solid #ccc"><input data-field="date" value="${dateStr}" placeholder="YYYY-MM-DD" style="width:100%;border:0;padding:4px" /></td>
+          <td style="padding:0;border:1px solid #ccc"><input data-field="time" value="${timeStr}" placeholder="HH:MM" style="width:100%;border:0;padding:4px" /></td>
+          <td style="padding:4px;border:1px solid #ccc;white-space:nowrap">
+            <button data-action="save" style="margin-right:4px">💾</button>
+            <button data-action="delete" style="color:#b00000">🗑</button>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+
+    refreshPositionsBtn.addEventListener('click', loadPositionsList);
+
+  posTableBody.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button');
+      if(!btn) return;
+      const tr = btn.closest('tr');
+      const id = tr.getAttribute('data-id');
+      const action = btn.getAttribute('data-action');
+      if(action === 'delete') {
+        if(!confirm('Supprimer position '+id+' ?')) return;
+        try {
+          const res = await fetch(`http://localhost:4000/api/positions/${id}`, {method:'DELETE', headers: headers()});
+          const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
+          log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Suppression ID ${id}</div>` + log.innerHTML;
+          tr.remove();
+        } catch(err){ alert(err.message); }
+      } else if(action === 'save') {
+    const lat = tr.querySelector('input[data-field="lat"]').value.trim();
+    const lng = tr.querySelector('input[data-field="lng"]').value.trim();
+    const date = tr.querySelector('input[data-field="date"]').value.trim();
+    const time = tr.querySelector('input[data-field="time"]').value.trim();
+    if(time && !/^\d{2}:\d{2}$/.test(time)) { alert('Heure invalide (HH:MM)'); return; }
+        try {
+          const res = await fetch(`http://localhost:4000/api/positions/${id}`, {method:'PATCH', headers: headers(), body: JSON.stringify({lat,lng,date,time})});
+          const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
+          log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Mise à jour ID ${id}</div>` + log.innerHTML;
+        } catch(err){ alert(err.message); }
+      }
+    });
+
+    // Charger la liste initialement après login
+    (function waitLogin(){
+      const check = () => { if(adminCodeInput.value){ loadPositionsList(); } else setTimeout(check, 600); };
+      check();
+    })();
+
+    // Ajout rapide lat,lng
+    document.getElementById('quickBtn').addEventListener('click', async () => {
+      const field = document.getElementById('quickPair');
+      const val = field.value.trim();
+      if(!val) return;
+      const m = val.match(/^\s*([0-9.+-]+)\s*,\s*([0-9.+-]+)\s*$/);
+      if(!m) { alert('Format attendu: lat,lng'); return; }
+      const lat = parseFloat(m[1]);
+      const lng = parseFloat(m[2]);
+      try {
+        const res = await fetch(`http://localhost:4000/api/positions?dummy=${Date.now()}`, { method:'POST', headers: headers(), body: JSON.stringify({lat,lng}) });
+        const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
+        log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] (Rapide) ${lat.toFixed(5)},${lng.toFixed(5)}</div>` + log.innerHTML;
+        field.value = '';
+      } catch(err) { alert(err.message); }
+    });
+  </script>
+</body>
+</html>
