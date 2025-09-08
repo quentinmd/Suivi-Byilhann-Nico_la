@@ -112,6 +112,14 @@
   </div>
 
   <script>
+    // Détection dynamique de l'API (même logique que index.html)
+    const isLocalNet = /^192\.168\./.test(location.hostname);
+    const isDev = isLocalNet || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.port === '5173';
+    const PROD_API_DOMAIN = 'https://suivi-byilhann-nico-la.onrender.com'; // domaine backend Render
+    const API_BASE = (window.API_BASE_OVERRIDE && window.API_BASE_OVERRIDE.trim())
+      ? window.API_BASE_OVERRIDE.trim()
+      : (isDev ? `${location.protocol}//${location.hostname}:4000` : PROD_API_DOMAIN);
+    console.log('[Admin] API_BASE =', API_BASE);
     const loginForm = document.getElementById('loginForm');
     const loginCode = document.getElementById('loginCode');
     const loginStatus = document.getElementById('loginStatus');
@@ -129,7 +137,7 @@
     function headers(extra={}) { return Object.assign({'Content-Type':'application/json','X-Admin-Code': adminCodeInput.value}, extra); }
 
     async function loadRoute(){
-      const res = await fetch('http://localhost:4000/api/route');
+      const res = await fetch(`${API_BASE}/api/route`);
       const route = await res.json();
       const options = route.map(r=>`<option value="${r.name}">${r.seq} - ${r.name}${r.arrival_time?' (✔)':''}</option>`).join('');
       placeSelect.innerHTML = options;
@@ -141,7 +149,7 @@
       loginStatus.style.color = '#444';
       loginStatus.textContent = 'Vérification...';
       try {
-        const res = await fetch('http://localhost:4000/api/admin/verify', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({code: loginCode.value})});
+  const res = await fetch(`${API_BASE}/api/admin/verify`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({code: loginCode.value})});
         const j = await res.json();
         if(j.ok) {
           loginStatus.style.color = '#0a730a';
@@ -167,7 +175,7 @@
       data.lat = parseFloat(data.lat); data.lng = parseFloat(data.lng);
       const btn = form.querySelector('button'); btn.disabled = true;
       try {
-        const res = await fetch('http://localhost:4000/api/positions', { method:'POST', headers: headers(), body: JSON.stringify(data) });
+  const res = await fetch(`${API_BASE}/api/positions`, { method:'POST', headers: headers(), body: JSON.stringify(data) });
         const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
         log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Position (coords) OK${j.created_at? ' ('+ j.created_at +')':''}</div>` + log.innerHTML;
         form.reset();
@@ -179,7 +187,7 @@
       const data = Object.fromEntries(new FormData(placeForm).entries());
       const btn = placeForm.querySelector('button'); btn.disabled=true;
       try {
-        const res = await fetch('http://localhost:4000/api/positions/by-place', { method:'POST', headers: headers(), body: JSON.stringify(data) });
+    const res = await fetch(`${API_BASE}/api/positions/by-place`, { method:'POST', headers: headers(), body: JSON.stringify(data) });
         const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
         log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Position (lieu: ${data.name}) OK</div>` + log.innerHTML;
       } catch(err) { alert(err.message); } finally { btn.disabled=false; }
@@ -190,7 +198,7 @@
       const data = Object.fromEntries(new FormData(arrivalForm).entries());
       const btn = arrivalForm.querySelector('button'); btn.disabled=true;
       try {
-        const res = await fetch('http://localhost:4000/api/route/arrival', { method:'POST', headers: headers(), body: JSON.stringify(data) });
+  const res = await fetch(`${API_BASE}/api/route/arrival`, { method:'POST', headers: headers(), body: JSON.stringify(data) });
         const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
         log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Arrivée ${data.name} = ${j.arrival_time}</div>` + log.innerHTML;
         loadRoute();
@@ -198,7 +206,7 @@
     });
 
     async function loadPositionsList(){
-      const res = await fetch('http://localhost:4000/api/positions');
+  const res = await fetch(`${API_BASE}/api/positions`);
       const list = await res.json();
       posTableBody.innerHTML = list.map(p=>{
         let dateStr = '', timeStr='';
@@ -231,7 +239,7 @@
       if(action === 'delete') {
         if(!confirm('Supprimer position '+id+' ?')) return;
         try {
-          const res = await fetch(`http://localhost:4000/api/positions/${id}`, {method:'DELETE', headers: headers()});
+          const res = await fetch(`${API_BASE}/api/positions/${id}`, {method:'DELETE', headers: headers()});
           const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
           log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Suppression ID ${id}</div>` + log.innerHTML;
           tr.remove();
@@ -243,7 +251,7 @@
     const time = tr.querySelector('input[data-field="time"]').value.trim();
     if(time && !/^\d{2}:\d{2}$/.test(time)) { alert('Heure invalide (HH:MM)'); return; }
         try {
-          const res = await fetch(`http://localhost:4000/api/positions/${id}`, {method:'PATCH', headers: headers(), body: JSON.stringify({lat,lng,date,time})});
+          const res = await fetch(`${API_BASE}/api/positions/${id}`, {method:'PATCH', headers: headers(), body: JSON.stringify({lat,lng,date,time})});
           const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
           log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Mise à jour ID ${id}</div>` + log.innerHTML;
         } catch(err){ alert(err.message); }
@@ -266,7 +274,7 @@
       const lat = parseFloat(m[1]);
       const lng = parseFloat(m[2]);
       try {
-        const res = await fetch(`http://localhost:4000/api/positions?dummy=${Date.now()}`, { method:'POST', headers: headers(), body: JSON.stringify({lat,lng}) });
+  const res = await fetch(`${API_BASE}/api/positions?dummy=${Date.now()}`, { method:'POST', headers: headers(), body: JSON.stringify({lat,lng}) });
         const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
         log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] (Rapide) ${lat.toFixed(5)},${lng.toFixed(5)}</div>` + log.innerHTML;
         field.value = '';
