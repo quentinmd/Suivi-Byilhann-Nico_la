@@ -135,8 +135,11 @@ app.post('/api/positions', checkAdmin, async (req,res)=> {
       else if(date && !time) createdAt = buildParisISO(date, null);
       else if(time && /T/.test(time)) createdAt = time; // assume iso
     }
-    if(createdAt) await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',['Team',lat,lng,createdAt]);
-    else await run('INSERT INTO positions(streamer,lat,lng) VALUES (?,?,?)',['Team',lat,lng]);
+    if(!createdAt) {
+      // Uniformiser : toujours un ISO Europe/Paris
+      createdAt = buildParisISO();
+    }
+    await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',['Team',lat,lng,createdAt]);
     res.json({ok:true, created_at: createdAt});
   } catch(e){ res.status(500).json({error:e.message}); }
 });
@@ -151,9 +154,9 @@ app.get('/api/positions/quick', checkAdmin, async (req,res)=> {
       else if(date && !time) createdAt = buildParisISO(date, null);
       else if(time && /T/.test(time)) createdAt = time;
     }
-    if(createdAt) await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',['Team',parseFloat(lat),parseFloat(lng),createdAt]);
-    else await run('INSERT INTO positions(streamer,lat,lng) VALUES (?,?,?)',['Team',parseFloat(lat),parseFloat(lng)]);
-    res.json({ok:true, created_at: createdAt});
+  if(!createdAt) createdAt = buildParisISO();
+  await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',['Team',parseFloat(lat),parseFloat(lng),createdAt]);
+  res.json({ok:true, created_at: createdAt});
   } catch(e){ res.status(500).json({error:e.message}); }
 });
 
@@ -193,8 +196,9 @@ app.post('/api/positions/by-place', checkAdmin, async (req,res)=> {
     if(!name) return res.status(400).json({error:'Missing name'});
     const r = await get('SELECT * FROM route WHERE LOWER(name)=LOWER(?)',[name]);
     if(!r) return res.status(404).json({error:'Lieu non trouvé dans le parcours'});
-    await run('INSERT INTO positions(streamer,lat,lng) VALUES (?,?,?)',[ 'Team', r.lat, r.lng]);
-    res.json({ok:true, lat:r.lat, lng:r.lng});
+  const createdAt = buildParisISO();
+  await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',[ 'Team', r.lat, r.lng, createdAt]);
+  res.json({ok:true, lat:r.lat, lng:r.lng, created_at: createdAt});
   } catch(e){ res.status(500).json({error:e.message}); }
 });
 
