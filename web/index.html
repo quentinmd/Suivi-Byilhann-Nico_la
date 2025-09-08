@@ -45,12 +45,16 @@
 
   const state = { positions: [], route: [], polyline: null, marker: null, plannedLine: null, startMarker: null, lastCount: 0, initialFitted: false, startTime: null, totalKm: 0 };
 
-    async function fetchStart() {
-      const res = await fetch(`${API_BASE}/api/start`);
-      return res.json();
+    async function safeFetchJson(url){
+      const res = await fetch(url, {headers:{'Accept':'application/json'}});
+      const ct = res.headers.get('content-type')||'';
+      const txt = await res.text();
+      if(!txt){ throw new Error('Réponse vide '+res.status+' '+url); }
+      try { return JSON.parse(txt); } catch(e){ console.error('Réponse non JSON:', {url,status:res.status, ct, bodyPreview: txt.slice(0,120)}); throw e; }
     }
-  async function fetchPositions() { const res = await fetch(`${API_BASE}/api/positions`); return res.json(); }
-  async function fetchRoute() { const res = await fetch(`${API_BASE}/api/route`); return res.json(); }
+    async function fetchStart() { return safeFetchJson(`${API_BASE}/api/start?t=${Date.now()}`); }
+    async function fetchPositions() { return safeFetchJson(`${API_BASE}/api/positions?t=${Date.now()}`); }
+    async function fetchRoute() { return safeFetchJson(`${API_BASE}/api/route?t=${Date.now()}`); }
 
     function updateMap() {
       // Parcours planifié (gris pointillé)
@@ -120,7 +124,13 @@
     }
 
     async function init() {
-      const [start, route] = await Promise.all([fetchStart(), fetchRoute()]);
+      let start, route;
+      try {
+        [start, route] = await Promise.all([fetchStart(), fetchRoute()]);
+      } catch(err){
+        console.error('Erreur chargement initial:', err);
+        document.getElementById('legend').innerHTML = '<strong>Erreur chargement API</strong><br>'+ (err.message||'');
+        return; }
       state.route = route;
       if(start.start_lat && start.start_lng) {
         const slat = parseFloat(start.start_lat), slng = parseFloat(start.start_lng);
