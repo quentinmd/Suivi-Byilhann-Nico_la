@@ -36,7 +36,10 @@
   // - Prod (avec reverse proxy / même domaine) => chaîne vide (chemins relatifs)
   const isLocalNet = /^192\.168\./.test(location.hostname);
   const isDev = isLocalNet || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.port === '5173';
-  const API_BASE = (window.API_BASE_OVERRIDE && window.API_BASE_OVERRIDE.trim()) ? window.API_BASE_OVERRIDE.trim() : (isDev ? `${location.protocol}//${location.hostname}:4000` : '');
+  const PROD_API_DOMAIN = 'https://suivi-byilhann-nico-la.onrender.com'; // backend Render
+  const API_BASE = (window.API_BASE_OVERRIDE && window.API_BASE_OVERRIDE.trim())
+    ? window.API_BASE_OVERRIDE.trim()
+    : (isDev ? `${location.protocol}//${location.hostname}:4000` : PROD_API_DOMAIN);
   console.log('[Tracker] API_BASE =', API_BASE || '(chemins relatifs)');
   function showDebug(msg){
     let box = document.getElementById('debugBox');
