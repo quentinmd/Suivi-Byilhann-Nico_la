@@ -8,6 +8,15 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 const PORT = process.env.PORT || 4000;
+
+// Override éventuel du code admin via variable d'environnement
+if(process.env.ADMIN_CODE) {
+  // Met à jour / insère le code admin avant tout traitement
+  try {
+    db.run('INSERT INTO meta(key,value) VALUES ("admin_code", ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value', [process.env.ADMIN_CODE]);
+    console.log('[Admin] Code admin défini via ADMIN_CODE (env)');
+  } catch(e){ console.warn('[Admin] Impossible de définir ADMIN_CODE:', e.message); }
+}
 // Config Twitch via variables d'environnement (à définir avant lancement)
 const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID || '';
 const TWITCH_CLIENT_SECRET = process.env.TWITCH_CLIENT_SECRET || '';
