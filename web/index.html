@@ -41,6 +41,14 @@
     ? window.API_BASE_OVERRIDE.trim()
     : (isDev ? `${location.protocol}//${location.hostname}:4000` : PROD_API_DOMAIN);
   console.log('[Tracker] API_BASE =', API_BASE || '(chemins relatifs)');
+  // Formateur durée: retourne "D j H h M min"
+  function formatDHm(ms){
+    const totalMin = Math.max(0, Math.floor(ms/60000));
+    const days = Math.floor(totalMin / (24*60));
+    const hours = Math.floor((totalMin % (24*60)) / 60);
+    const minutes = totalMin % 60;
+    return `${days} j ${hours} h ${minutes} min`;
+  }
   function showDebug(msg){
     let box = document.getElementById('debugBox');
     if(!box){
@@ -114,8 +122,8 @@
       let d=0; for(let i=1;i<state.positions.length;i++){ const A=state.positions[i-1], B=state.positions[i]; d+=haversine(A.lat,A.lng,B.lat,B.lng);} state.totalKm=d; }
     function updateLegendDynamic(){
       if(!state.startTime) return; const startDate=new Date(state.startTime); const now=new Date();
-      const diffHrs = ((now - startDate)/3600000).toFixed(1);
-      const hoursEl = document.querySelector('[data-hours]'); if(hoursEl) hoursEl.textContent = diffHrs + ' h';
+      const diffStr = formatDHm(now - startDate);
+      const hoursEl = document.querySelector('[data-hours]'); if(hoursEl) hoursEl.textContent = diffStr;
       const distEl = document.querySelector('[data-distance]'); if(distEl) distEl.textContent = state.totalKm.toFixed(1) + ' km';
     }
     async function refresh() {
@@ -155,10 +163,10 @@
       }
       const startDate = new Date(start.start_time);
       const now = new Date();
-      const diffHrs = ((now - startDate)/3600000).toFixed(1);
+      const diffStr = formatDHm(now - startDate);
       state.startTime = start.start_time;
       document.getElementById('legend').innerHTML = `<h1>Suivi</h1>
-        <div><strong>Heures écoulées :</strong> <span data-hours>${diffHrs} h</span></div>
+        <div><strong>Temps écoulé :</strong> <span data-hours>${diffStr}</span></div>
         <div><strong>Distance :</strong> <span data-distance>0.0 km</span></div>
         <div><strong>Arrivée prévue :</strong> Paris</div>
         <div style="margin-top:6px"><span style="display:inline-block;width:14px;height:4px;background:#e63946;vertical-align:middle;margin-right:4px"></span>Parcours réel<br><span style="display:inline-block;width:14px;height:4px;background:#777;vertical-align:middle;margin-right:4px;border-bottom:2px dashed #777"></span>Parcours planifié</div>
