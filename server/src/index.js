@@ -3,7 +3,7 @@ import cors from 'cors';
 import db from './db.js';
 import fetch from 'node-fetch';
 import 'dotenv/config';
-import { firestore, makeTimestamp } from './firebase.js';
+import { firestore, makeTimestamp, firebaseDebug } from './firebase.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -711,6 +711,11 @@ app.get('/api/_debug/twitch-env', (req,res)=>{
 app.get('/api/_debug/firestore-ready', (req,res)=>{
   const ready = !!(USE_FIRESTORE && firestore && typeof firestore.collection === 'function');
   res.json({ USE_FIRESTORE, firestore_ready: ready });
+});
+
+// Debug: état Firebase (méthode de chargement, chemin, erreurs)
+app.get('/api/_debug/firebase-status', (req,res)=>{
+  res.json(firebaseDebug);
 });
 
 // Debug: lister les positions SQLite même si USE_FIRESTORE=true
