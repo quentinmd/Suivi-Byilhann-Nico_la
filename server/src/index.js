@@ -83,6 +83,12 @@ const ORS_KEY = process.env.OPENROUTESERVICE_API_KEY || '';
 const WALKING_SEGMENTS = (process.env.WALKING_SEGMENTS || 'true').toLowerCase() === 'true';
 const WALKING_MAX_SEGMENTS = Math.max(5, parseInt(process.env.WALKING_MAX_SEGMENTS || '40', 10));
 const isFirestoreReady = () => !!(USE_FIRESTORE && firestore && typeof firestore.collection === 'function');
+const shouldFsFallback = (err) => {
+  try {
+    const msg = String(err && (err.message || err)).toLowerCase();
+    return msg.includes('unauthenticated') || msg.includes('permission') || msg.includes('credential');
+  } catch { return false; }
+};
 
 // Fetch avec timeout pour éviter les requêtes pendantes
 async function fetchWithTimeout(url, options={}, timeoutMs=10000){
@@ -329,15 +335,19 @@ app.post('/api/positions', checkAdmin, async (req,res)=> {
       // Uniformiser : toujours un ISO Europe/Paris
       createdAt = buildParisISO();
     }
-  if(isFirestoreReady()){
-      const saved = await fs_addPosition({lat, lng, created_at: createdAt});
-      // tenter de créer un segment à pied
-      await fs_addWalkingSegmentForNewPosition(saved);
-      res.json({ok:true, created_at: saved.created_at, id: saved.id});
-    } else {
-      await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',['Team',lat,lng,createdAt]);
-      res.json({ok:true, created_at: createdAt});
+    if(isFirestoreReady()){
+      try {
+        const saved = await fs_addPosition({lat, lng, created_at: createdAt});
+        // tenter de créer un segment à pied (non bloquant)
+        try { await fs_addWalkingSegmentForNewPosition(saved); } catch(_){ }
+        return res.json({ok:true, created_at: saved.created_at, id: saved.id});
+      } catch(err){
+        if(!shouldFsFallback(err)) throw err;
+        console.warn('[POST /api/positions] Firestore échec, fallback SQLite:', err.message);
+      }
     }
+    await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',['Team',lat,lng,createdAt]);
+    res.json({ok:true, created_at: createdAt});
   } catch(e){ res.status(500).json({error:e.message}); }
 });
 
@@ -352,36 +362,44 @@ app.get('/api/positions/quick', checkAdmin, async (req,res)=> {
       else if(time && /T/.test(time)) createdAt = time;
     }
   if(!createdAt) createdAt = buildParisISO();
-  if(isFirestoreReady()){
-      const saved = await fs_addPosition({lat: parseFloat(lat), lng: parseFloat(lng), created_at: createdAt});
-      await fs_addWalkingSegmentForNewPosition(saved);
-      res.json({ok:true, created_at: saved.created_at, id: saved.id});
-    } else {
-      await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',['Team',parseFloat(lat),parseFloat(lng),createdAt]);
-      res.json({ok:true, created_at: createdAt});
+    if(isFirestoreReady()){
+      try {
+        const saved = await fs_addPosition({lat: parseFloat(lat), lng: parseFloat(lng), created_at: createdAt});
+        try { await fs_addWalkingSegmentForNewPosition(saved); } catch(_){ }
+        return res.json({ok:true, created_at: saved.created_at, id: saved.id});
+      } catch(err){
+        if(!shouldFsFallback(err)) throw err;
+        console.warn('[GET /api/positions/quick] Firestore échec, fallback SQLite:', err.message);
+      }
     }
+    await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',['Team',parseFloat(lat),parseFloat(lng),createdAt]);
+    res.json({ok:true, created_at: createdAt});
   } catch(e){ res.status(500).json({error:e.message}); }
 });
 
 app.patch('/api/positions/:id', checkAdmin, async (req,res)=> {
   try {
     const {id} = req.params; const {lat,lng,date,time} = req.body;
-  if(isFirestoreReady()){
-      const cur = await fs_getPosition(id);
-      if(!cur) return res.status(404).json({error:'Not found'});
-      const newLat = lat!=null ? parseFloat(lat) : cur.lat;
-      const newLng = lng!=null ? parseFloat(lng) : cur.lng;
-      let createdAt = cur.created_at;
-      if(date || time) {
-        if(time && /^[0-9]{2}:[0-9]{2}$/.test(time)) createdAt = buildParisISO(date || (createdAt?createdAt.slice(0,10):null), time);
-        else if(date && !time) {
-          const oldTime = createdAt? createdAt.slice(11,16) : null;
-          createdAt = buildParisISO(date, oldTime);
-        } else if(time && /T/.test(time)) createdAt = time;
+    if(isFirestoreReady()){
+      try {
+        const cur = await fs_getPosition(id);
+        if(!cur) throw new Error('Not found');
+        const newLat = lat!=null ? parseFloat(lat) : cur.lat;
+        const newLng = lng!=null ? parseFloat(lng) : cur.lng;
+        let createdAt = cur.created_at;
+        if(date || time) {
+          if(time && /^[0-9]{2}:[0-9]{2}$/.test(time)) createdAt = buildParisISO(date || (createdAt?createdAt.slice(0,10):null), time);
+          else if(date && !time) {
+            const oldTime = createdAt? createdAt.slice(11,16) : null;
+            createdAt = buildParisISO(date, oldTime);
+          } else if(time && /T/.test(time)) createdAt = time;
+        }
+        await fs_updatePosition(id, { lat:newLat, lng:newLng, created_at: createdAt });
+        return res.json({ok:true,id,lat:newLat,lng:newLng,created_at:createdAt});
+      } catch(err){
+        if(!shouldFsFallback(err)) throw err;
+        console.warn('[PATCH /api/positions/:id] Firestore échec, fallback SQLite:', err.message);
       }
-      await fs_updatePosition(id, { lat:newLat, lng:newLng, created_at: createdAt });
-      res.json({ok:true,id,lat:newLat,lng:newLng,created_at:createdAt});
-      return;
     }
     const row = await get('SELECT * FROM positions WHERE id=?',[id]);
     if(!row) return res.status(404).json({error:'Not found'});
@@ -403,12 +421,16 @@ app.patch('/api/positions/:id', checkAdmin, async (req,res)=> {
 app.delete('/api/positions/:id', checkAdmin, async (req,res)=> {
   try {
     const {id} = req.params;
-  if(isFirestoreReady()){
-      const cur = await fs_getPosition(id);
-      if(!cur) return res.status(404).json({error:'Not found'});
-      await fs_deletePosition(id);
-      res.json({ok:true});
-      return;
+    if(isFirestoreReady()){
+      try {
+        const cur = await fs_getPosition(id);
+        if(!cur) throw new Error('Not found');
+        await fs_deletePosition(id);
+        return res.json({ok:true});
+      } catch(err){
+        if(!shouldFsFallback(err)) throw err;
+        console.warn('[DELETE /api/positions/:id] Firestore échec, fallback SQLite:', err.message);
+      }
     }
     const row = await get('SELECT id FROM positions WHERE id=?',[id]);
     if(!row) return res.status(404).json({error:'Not found'});
@@ -424,14 +446,18 @@ app.post('/api/positions/by-place', checkAdmin, async (req,res)=> {
     const r = await get('SELECT * FROM route WHERE LOWER(name)=LOWER(?)',[name]);
     if(!r) return res.status(404).json({error:'Lieu non trouvé dans le parcours'});
     const createdAt = buildParisISO();
-  if(isFirestoreReady()){
-      const saved = await fs_addPosition({ lat: r.lat, lng: r.lng, created_at: createdAt });
-      await fs_addWalkingSegmentForNewPosition(saved);
-      res.json({ok:true, lat:r.lat, lng:r.lng, created_at: saved.created_at, id: saved.id});
-    } else {
-      await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',[ 'Team', r.lat, r.lng, createdAt]);
-      res.json({ok:true, lat:r.lat, lng:r.lng, created_at: createdAt});
+    if(isFirestoreReady()){
+      try {
+        const saved = await fs_addPosition({ lat: r.lat, lng: r.lng, created_at: createdAt });
+        try { await fs_addWalkingSegmentForNewPosition(saved); } catch(_){ }
+        return res.json({ok:true, lat:r.lat, lng:r.lng, created_at: saved.created_at, id: saved.id});
+      } catch(err){
+        if(!shouldFsFallback(err)) throw err;
+        console.warn('[POST /api/positions/by-place] Firestore échec, fallback SQLite:', err.message);
+      }
     }
+    await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)',[ 'Team', r.lat, r.lng, createdAt]);
+    res.json({ok:true, lat:r.lat, lng:r.lng, created_at: createdAt});
   } catch(e){ res.status(500).json({error:e.message}); }
 });
 
