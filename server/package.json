@@ -12,6 +12,7 @@
     "express": "^4.19.2",
   "sqlite3": "^5.1.7",
   "node-fetch": "^3.3.2",
-  "dotenv": "^16.4.5"
+  "dotenv": "^16.4.5",
+  "firebase-admin": "^12.6.0"
   }
 }
