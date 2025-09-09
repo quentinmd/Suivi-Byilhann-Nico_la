@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 const USE_FIRESTORE = (process.env.USE_FIRESTORE || '').toLowerCase() === 'true';
+export const firebaseDebug = { useFirestore: USE_FIRESTORE, method: null, path: null, error: null, initialized: false };
 
 let app;
 if (USE_FIRESTORE && !admin.apps.length) {
@@ -16,9 +17,11 @@ if (USE_FIRESTORE && !admin.apps.length) {
       if (parsed.private_key && parsed.private_key.includes('\\n')) {
         parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
       }
-      cred = admin.credential.cert(parsed);
+  cred = admin.credential.cert(parsed);
+  firebaseDebug.method = 'json';
     } catch (e) {
-      console.warn('[Firebase] FIREBASE_SERVICE_ACCOUNT_JSON invalide:', e.message);
+  console.warn('[Firebase] FIREBASE_SERVICE_ACCOUNT_JSON invalide:', e.message);
+  firebaseDebug.error = 'JSON parse error: ' + e.message;
     }
   } else {
     const candidatePaths = [];
@@ -34,17 +37,21 @@ if (USE_FIRESTORE && !admin.apps.length) {
         if (parsed.private_key && parsed.private_key.includes('\\n')) {
           parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
         }
-        cred = admin.credential.cert(parsed);
-        console.log('[Firebase] Credentials chargés depuis', p);
+    cred = admin.credential.cert(parsed);
+    console.log('[Firebase] Credentials chargés depuis', p);
+    firebaseDebug.method = 'file';
+    firebaseDebug.path = p;
         break;
       } catch(e){ /* essayer suivant */ }
     }
-    if(!cred && filePath){ console.warn('[Firebase] FIREBASE_SERVICE_ACCOUNT_FILE introuvable ou invalide:', filePath); }
+  if(!cred && filePath){ console.warn('[Firebase] FIREBASE_SERVICE_ACCOUNT_FILE introuvable ou invalide:', filePath); firebaseDebug.error = 'FILE not found or invalid: ' + filePath; firebaseDebug.path = filePath; }
   }
   try {
-    app = admin.initializeApp({ credential: cred || admin.credential.applicationDefault() });
+  app = admin.initializeApp({ credential: cred || admin.credential.applicationDefault() });
+  firebaseDebug.initialized = true;
   } catch(e) {
-    console.warn('[Firebase] Initialisation ignorée (pas de credentials valides):', e.message);
+  console.warn('[Firebase] Initialisation ignorée (pas de credentials valides):', e.message);
+  firebaseDebug.error = 'init failed: ' + e.message;
   }
 }
 export const firestore = USE_FIRESTORE && admin.apps.length ? admin.firestore() : {};
