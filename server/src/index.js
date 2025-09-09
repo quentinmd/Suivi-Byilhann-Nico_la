@@ -82,6 +82,7 @@ const USE_FIRESTORE = (process.env.USE_FIRESTORE || '').toLowerCase() === 'true'
 const ORS_KEY = process.env.OPENROUTESERVICE_API_KEY || '';
 const WALKING_SEGMENTS = (process.env.WALKING_SEGMENTS || 'true').toLowerCase() === 'true';
 const WALKING_MAX_SEGMENTS = Math.max(5, parseInt(process.env.WALKING_MAX_SEGMENTS || '40', 10));
+const isFirestoreReady = () => !!(USE_FIRESTORE && firestore && typeof firestore.collection === 'function');
 
 // Fetch avec timeout pour éviter les requêtes pendantes
 async function fetchWithTimeout(url, options={}, timeoutMs=10000){
@@ -294,14 +295,23 @@ app.post('/api/admin/verify', async (req,res)=>{
 
 app.get('/api/positions', async (req,res)=> {
   try {
-    if(USE_FIRESTORE){
-      const rows = await fs_listPositions();
-      // Harmoniser la forme: id numérique attendu côté front? On laisse tel quel.
-      res.json(rows.map(r=> ({ id: r.id, streamer: r.streamer, lat: r.lat, lng: r.lng, created_at: r.created_at })));
-    } else {
-      const rows = await all('SELECT * FROM positions ORDER BY id ASC');
-      res.json(rows);
+    // Permettre de forcer SQLite même si USE_FIRESTORE=true (ex: ?source=sqlite)
+    const src = String(req.query.source||'').toLowerCase();
+    const forceSqlite = src==='sqlite' || src==='sql' || src==='db';
+
+    if(USE_FIRESTORE && !forceSqlite){
+      try {
+        const rows = await fs_listPositions();
+        // Harmoniser la forme: id numérique attendu côté front? On laisse tel quel.
+        return res.json(rows.map(r=> ({ id: r.id, streamer: r.streamer, lat: r.lat, lng: r.lng, created_at: r.created_at })));
+      } catch(err){
+        // Fallback automobile en SQLite si Firestore échoue (ex: credentials manquants)
+        console.warn('[GET /api/positions] Firestore indisponible, fallback SQLite:', err.message);
+      }
     }
+    // SQLite par défaut ou en fallback
+    const rows = await all('SELECT * FROM positions ORDER BY id ASC');
+    res.json(rows);
   } catch(e){ res.status(500).json({error:e.message}); }
 });
 
@@ -319,7 +329,7 @@ app.post('/api/positions', checkAdmin, async (req,res)=> {
       // Uniformiser : toujours un ISO Europe/Paris
       createdAt = buildParisISO();
     }
-    if(USE_FIRESTORE){
+  if(isFirestoreReady()){
       const saved = await fs_addPosition({lat, lng, created_at: createdAt});
       // tenter de créer un segment à pied
       await fs_addWalkingSegmentForNewPosition(saved);
@@ -342,7 +352,7 @@ app.get('/api/positions/quick', checkAdmin, async (req,res)=> {
       else if(time && /T/.test(time)) createdAt = time;
     }
   if(!createdAt) createdAt = buildParisISO();
-    if(USE_FIRESTORE){
+  if(isFirestoreReady()){
       const saved = await fs_addPosition({lat: parseFloat(lat), lng: parseFloat(lng), created_at: createdAt});
       await fs_addWalkingSegmentForNewPosition(saved);
       res.json({ok:true, created_at: saved.created_at, id: saved.id});
@@ -356,7 +366,7 @@ app.get('/api/positions/quick', checkAdmin, async (req,res)=> {
 app.patch('/api/positions/:id', checkAdmin, async (req,res)=> {
   try {
     const {id} = req.params; const {lat,lng,date,time} = req.body;
-    if(USE_FIRESTORE){
+  if(isFirestoreReady()){
       const cur = await fs_getPosition(id);
       if(!cur) return res.status(404).json({error:'Not found'});
       const newLat = lat!=null ? parseFloat(lat) : cur.lat;
@@ -393,7 +403,7 @@ app.patch('/api/positions/:id', checkAdmin, async (req,res)=> {
 app.delete('/api/positions/:id', checkAdmin, async (req,res)=> {
   try {
     const {id} = req.params;
-    if(USE_FIRESTORE){
+  if(isFirestoreReady()){
       const cur = await fs_getPosition(id);
       if(!cur) return res.status(404).json({error:'Not found'});
       await fs_deletePosition(id);
@@ -414,7 +424,7 @@ app.post('/api/positions/by-place', checkAdmin, async (req,res)=> {
     const r = await get('SELECT * FROM route WHERE LOWER(name)=LOWER(?)',[name]);
     if(!r) return res.status(404).json({error:'Lieu non trouvé dans le parcours'});
     const createdAt = buildParisISO();
-    if(USE_FIRESTORE){
+  if(isFirestoreReady()){
       const saved = await fs_addPosition({ lat: r.lat, lng: r.lng, created_at: createdAt });
       await fs_addWalkingSegmentForNewPosition(saved);
       res.json({ok:true, lat:r.lat, lng:r.lng, created_at: saved.created_at, id: saved.id});
@@ -435,7 +445,8 @@ app.get('/api/walking-track', async (req,res)=>{
   try {
   const src = String(req.query.source||'').toLowerCase();
   const forceSqlite = src==='sqlite' || src==='sql' || src==='db';
-  if(USE_FIRESTORE && !forceSqlite){
+  const firestoreReady = !!(USE_FIRESTORE && firestore && typeof firestore.collection === 'function');
+  if(firestoreReady && !forceSqlite){
       const wantFull = (String(req.query.full||'').toLowerCase()==='true') || (String(req.query.full||'')==='1');
       // 1) Tenter d'utiliser les segments persistés
       const snap = await firestore.collection('segments').orderBy('created_at','asc').get();
@@ -636,7 +647,7 @@ app.get('/api/walking-route', async (req,res)=>{
 // Migration des positions SQLite -> Firestore (conserver historique)
 app.post('/api/migrate/sqlite-to-firestore', checkAdmin, async (req,res)=>{
   try {
-    if(!USE_FIRESTORE) return res.status(400).json({error:'Activer USE_FIRESTORE=true pour migrer'});
+  if(!isFirestoreReady()) return res.status(400).json({error:'Firestore non prêt (activer USE_FIRESTORE=true et fournir des credentials)'});
     const rows = await all('SELECT * FROM positions ORDER BY id ASC');
     let copied=0, skipped=0;
     for(const row of rows){
@@ -660,7 +671,7 @@ app.post('/api/migrate/sqlite-to-firestore', checkAdmin, async (req,res)=>{
 // Recréer tous les segments à pied (à lancer après migration)
 app.post('/api/walking-segments/rebuild', checkAdmin, async (req,res)=>{
   try {
-    if(!USE_FIRESTORE) return res.status(400).json({error:'Activer USE_FIRESTORE pour rebuild'});
+  if(!isFirestoreReady()) return res.status(400).json({error:'Firestore non prêt (activer USE_FIRESTORE et fournir des credentials)'});
   let coll = firestore.collection('positions');
   try { coll = coll.orderBy('created_at_ts','asc'); } catch { coll = coll.orderBy('created_at','asc'); }
   const snap = await coll.get();
@@ -709,7 +720,7 @@ app.get('/api/_debug/twitch-env', (req,res)=>{
 
 // Debug: vérifier si Firestore est prêt et l'état USE_FIRESTORE
 app.get('/api/_debug/firestore-ready', (req,res)=>{
-  const ready = !!(USE_FIRESTORE && firestore && typeof firestore.collection === 'function');
+  const ready = isFirestoreReady();
   res.json({ USE_FIRESTORE, firestore_ready: ready });
 });
 
