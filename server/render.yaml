@@ -1,0 +1,23 @@
+services:
+- type: web
+  name: suivi-byilhann-nico-la
+  env: node
+  plan: free
+  buildCommand: npm install
+  startCommand: npm start
+  autoDeploy: true
+  envVars:
+    - key: NODE_VERSION
+      value: 20
+    - key: USE_FIRESTORE
+      value: "true"
+    - key: TWITCH_CLIENT_ID
+      sync: false
+    - key: TWITCH_CLIENT_SECRET
+      sync: false
+  # Serve both API and static web from the same service
+  routes:
+    - src: /
+      dest: /
+    - src: /api/*
+      dest: /api/*
