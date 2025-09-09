@@ -35,13 +35,7 @@
     <hr style="margin:8px 0">
     <div id="twitchStatus">Twitch: chargement...</div>
   </div>
-  <div class="next-dest" id="nextDest" style="display:none">
-    <div class="row"><strong>Prochaine destination :</strong> <span id="nextCity">—</span></div>
-    <div class="bar-wrap">
-      <div class="km-label"><span id="nextKm">—</span> restants</div>
-      <div class="bar"><div class="fill" id="nextFill"></div></div>
-    </div>
-  </div>
+  <!-- Bloc prochaine destination supprimé -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
   // Base API dynamique:
@@ -49,7 +43,8 @@
   // - Prod (avec reverse proxy / même domaine) => chaîne vide (chemins relatifs)
   const isLocalNet = /^192\.168\./.test(location.hostname);
   const isDev = isLocalNet || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.port === '5173';
-  const PROD_API_DOMAIN = 'https://suivi-byilhann-nico-la.onrender.com'; // backend Render
+  // En prod, même domaine => chemins relatifs ("")
+  const PROD_API_DOMAIN = '';
   const API_BASE = (window.API_BASE_OVERRIDE && window.API_BASE_OVERRIDE.trim())
     ? window.API_BASE_OVERRIDE.trim()
     : (isDev ? `${location.protocol}//${location.hostname}:4000` : PROD_API_DOMAIN);
@@ -72,13 +67,18 @@
     }
     box.innerHTML = msg;
   }
-    const map = L.map('map').setView([43.604482, 3.881177], 8); // around Montpellier
+  const map = L.map('map').setView([43.604482, 3.881177], 8); // around Montpellier
+  // Panes pour contrôler l'ordre d'affichage
+  map.createPane('planned');
+  map.getPane('planned').style.zIndex = 420;
+  map.createPane('walking');
+  map.getPane('walking').style.zIndex = 650;
     L.tileLayer('https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-  const state = { positions: [], route: [], polyline: null, marker: null, plannedLine: null, startMarker: null, lastCount: 0, initialFitted: false, startTime: null, totalKm: 0 };
+  const state = { positions: [], route: [], marker: null, plannedLine: null, startMarker: null, lastCount: 0, initialFitted: false, startTime: null, totalKm: 0, walkingLayer: null, walkingKmTotal: 0, walkingFitted: false, startLat:null, startLng:null, startConnector:null, startConnectorKm:0 };
   const MAJOR_CITIES = new Set([
     'Montpellier (Radisson Blu)','Nîmes','Avignon','Orange','Montélimar','Valence','Vienne','Lyon','Mâcon','Chalon-sur-Saône','Beaune','Dijon','Sens','Fontainebleau','Melun','Paris (Arrivée)'
   ]);
@@ -93,37 +93,31 @@
     async function fetchStart() { return safeFetchJson(`${API_BASE}/api/start?t=${Date.now()}`); }
     async function fetchPositions() { return safeFetchJson(`${API_BASE}/api/positions?t=${Date.now()}`); }
     async function fetchRoute() { return safeFetchJson(`${API_BASE}/api/route?t=${Date.now()}`); }
+  async function fetchWalkingTrack(){ return safeFetchJson(`${API_BASE}/api/walking-track?source=sqlite&full=1&t=${Date.now()}`); }
 
     function updateMap() {
       // Parcours planifié (gris pointillé)
       if(state.route.length) {
         const plannedLatLngs = state.route.map(r=>[r.lat, r.lng]);
         if(!state.plannedLine) {
-          state.plannedLine = L.polyline(plannedLatLngs, {color:'#777', dashArray:'4,6', weight:3}).addTo(map);
+          state.plannedLine = L.polyline(plannedLatLngs, {color:'#777', dashArray:'4,6', weight:3, pane:'planned'}).addTo(map);
         } else {
           state.plannedLine.setLatLngs(plannedLatLngs);
         }
       }
-      // Positions réelles
-  // Les positions arrivent déjà ordonnées (id ASC)
-  const latlngs = state.positions.map(p=>[p.lat,p.lng]);
+      // Marqueur sur la dernière position (sans tracer la ligne rouge)
+      const latlngs = state.positions.map(p=>[p.lat,p.lng]);
       if(latlngs.length) {
-        if(!state.polyline) {
-          state.polyline = L.polyline(latlngs, {color:'#e63946', weight:5, lineJoin:'round'}).addTo(map);
-        } else {
-          state.polyline.setLatLngs(latlngs);
-        }
         const last = latlngs[latlngs.length-1];
         if(!state.marker) {
           state.marker = L.marker(last).addTo(map).bindPopup('Equipe position actuelle').openPopup();
         } else { state.marker.setLatLng(last); }
-        // Ajuster la vue initiale une seule fois quand on a au moins 2 points
         if(!state.initialFitted && latlngs.length >= 2) {
           try {
             const b = L.latLngBounds(latlngs);
             map.fitBounds(b.pad(0.15), {animate:true});
             state.initialFitted = true;
-          } catch(_){}
+          } catch(_){ }
         }
       }
     }
@@ -136,6 +130,65 @@
     }
     function computeDistance(){
       let d=0; for(let i=1;i<state.positions.length;i++){ const A=state.positions[i-1], B=state.positions[i]; d+=haversine(A.lat,A.lng,B.lat,B.lng);} state.totalKm=d; }
+  function updateWalkingLayer(geojson){
+      try {
+        const features = Array.isArray(geojson.features) ? geojson.features : [];
+        // Calcul distance totale des segments
+        let total = 0;
+        for(const f of features){
+          const dk = f.properties && typeof f.properties.distance_km === 'number' ? f.properties.distance_km : null;
+          if(dk!=null) total += dk; else if(f.geometry && f.geometry.type==='LineString'){
+            const coords = f.geometry.coordinates; // [lng,lat]
+            for(let i=1;i<coords.length;i++){
+              const [lng1,lat1] = coords[i-1];
+              const [lng2,lat2] = coords[i];
+              total += haversine(lat1,lng1,lat2,lng2);
+            }
+          }
+        }
+        state.walkingKmTotal = total;
+        if(state.walkingLayer){ state.walkingLayer.remove(); state.walkingLayer = null; }
+  state.walkingLayer = L.geoJSON(geojson, { pane:'walking', style: { color:'#2a9d8f', weight:5, opacity:0.95, lineCap:'round', lineJoin:'round' } }).addTo(map);
+  
+        try { if(state.walkingLayer && state.walkingLayer.bringToFront) state.walkingLayer.bringToFront(); } catch(_){ }
+        // Assurer le segment départ -> premier point si manquant
+        try {
+          if(state.startConnector){ state.startConnector.remove(); state.startConnector = null; state.startConnectorKm = 0; }
+          if(Number.isFinite(state.startLat) && Number.isFinite(state.startLng) && state.positions.length){
+            const firstPos = state.positions[0];
+            const d0 = haversine(state.startLat, state.startLng, firstPos.lat, firstPos.lng);
+            // Si la couche actuelle ne touche pas le départ (distance au plus proche point > 100m), on ajoute un connecteur
+            let needConnector = true;
+            try {
+              const b = state.walkingLayer.getBounds && state.walkingLayer.getBounds();
+              if(b && b.isValid && b.isValid()){
+                needConnector = b.contains([state.startLat, state.startLng]) ? false : true;
+              }
+            } catch(_){ }
+            if(needConnector && d0 > 0.05){ // >50m
+              state.startConnector = L.polyline([[state.startLat, state.startLng],[firstPos.lat, firstPos.lng]], { color:'#2a9d8f', weight:5, opacity:0.8, pane:'walking' }).addTo(map);
+              state.startConnectorKm = d0;
+            }
+          }
+        } catch(_){ }
+        // Ajouter la distance du connecteur au total affiché
+        state.walkingKmTotal = state.walkingKmTotal + (state.startConnectorKm || 0);
+        // Auto-fit une seule fois sur la couche marche si elle est valide
+        try {
+          const b = state.walkingLayer.getBounds && state.walkingLayer.getBounds();
+          if(b && b.isValid && b.isValid() && !state.walkingFitted){
+            let fitBounds = b;
+            try {
+              if(state.startConnector && state.startConnector.getBounds){
+                fitBounds = fitBounds.extend(state.startConnector.getBounds());
+              }
+            } catch(_){ }
+            map.fitBounds(fitBounds.pad(0.12));
+            state.walkingFitted = true;
+          }
+        } catch(_){ }
+      } catch(e){ console.warn('updateWalkingLayer error', e); }
+    }
     function routeDistance(iStart, iEnd){
       if(!state.route.length) return 0;
       const a = Math.max(0, Math.min(iStart, iEnd));
@@ -154,30 +207,15 @@
       }
       return {prev, next};
     }
-    function updateNextDestination(){
-      const box = document.getElementById('nextDest');
-      if(!state.route.length || state.positions.length===0){ box.style.display='none'; return; }
-      const last = state.positions[state.positions.length-1];
-      const idx = findNearestRouteIndex(last.lat,last.lng);
-      const {prev, next} = findPrevNextMajors(idx);
-      if(next==null){ box.style.display='none'; return; }
-      const nextCity = state.route[next].name;
-      const prevIdx = (prev!=null)? prev : 0;
-      const segTotal = routeDistance(prevIdx, next);
-      let segDone = routeDistance(prevIdx, idx) + haversine(state.route[idx].lat, state.route[idx].lng, last.lat, last.lng);
-      segDone = Math.max(0, Math.min(segTotal, segDone));
-      const remain = Math.max(0, segTotal - segDone);
-      const pct = segTotal>0 ? Math.round((segDone/segTotal)*100) : 0;
-      document.getElementById('nextCity').textContent = nextCity;
-      document.getElementById('nextKm').textContent = `${remain.toFixed(1)} km`;
-      document.getElementById('nextFill').style.width = pct + '%';
-      box.style.display = 'block';
-    }
+  // Bloc prochaine destination supprimé
     function updateLegendDynamic(){
       if(!state.startTime) return; const startDate=new Date(state.startTime); const now=new Date();
       const diffStr = formatDHm(now - startDate);
       const hoursEl = document.querySelector('[data-hours]'); if(hoursEl) hoursEl.textContent = diffStr;
-      const distEl = document.querySelector('[data-distance]'); if(distEl) distEl.textContent = state.totalKm.toFixed(1) + ' km';
+      const distEl = document.querySelector('[data-distance]'); if(distEl) {
+        const km = state.walkingKmTotal && state.walkingKmTotal>0 ? state.walkingKmTotal : state.totalKm;
+        distEl.textContent = km.toFixed(1) + ' km';
+      }
     }
     async function refresh() {
       try {
@@ -187,13 +225,15 @@
         state.lastCount = data.length;
         computeDistance();
         updateMap();
-        if(grew && state.initialFitted && state.polyline) {
-          // Ajuster légèrement le centre vers le dernier point sans changer trop le zoom
+        if(grew && state.initialFitted) {
           const last = state.positions[state.positions.length-1];
           if(last) map.panTo([last.lat, last.lng], {animate:true, duration:0.8});
         }
         updateLegendDynamic();
-  updateNextDestination();
+        // recharger la trace à pied si on a ajouté un point
+        if(grew){
+          try { const geo = await fetchWalkingTrack(); updateWalkingLayer(geo); } catch(_){}
+        }
       } catch(e) {
         console.warn('Erreur refresh positions', e);
       }
@@ -211,6 +251,7 @@
       state.route = route;
       if(start.start_lat && start.start_lng) {
         const slat = parseFloat(start.start_lat), slng = parseFloat(start.start_lng);
+        state.startLat = slat; state.startLng = slng;
         if(!state.startMarker) {
           state.startMarker = L.marker([slat, slng], {title:'Départ'}).addTo(map).bindPopup('Départ');
         }
@@ -221,13 +262,14 @@
       state.startTime = start.start_time;
       document.getElementById('legend').innerHTML = `<h1>Suivi</h1>
         <div><strong>Temps écoulé :</strong> <span data-hours>${diffStr}</span></div>
-        <div><strong>Distance :</strong> <span data-distance>0.0 km</span></div>
+        <div><strong>Distance (à pied) :</strong> <span data-distance>0.0 km</span></div>
         <div><strong>Arrivée prévue :</strong> Paris</div>
-        <div style="margin-top:6px"><span style="display:inline-block;width:14px;height:4px;background:#e63946;vertical-align:middle;margin-right:4px"></span>Parcours réel<br><span style="display:inline-block;width:14px;height:4px;background:#777;vertical-align:middle;margin-right:4px;border-bottom:2px dashed #777"></span>Parcours planifié</div>
-        <small>Mise à jour auto toutes les 30s.</small>`;
+  <div style="margin-top:6px"><span style="display:inline-block;width:14px;height:4px;background:#2a9d8f;vertical-align:middle;margin-right:4px"></span>Parcours à pied<br><span style="display:inline-block;width:14px;height:4px;background:#777;vertical-align:middle;margin-right:4px;border-bottom:2px dashed #777"></span>Parcours planifié</div>
+  <small>Mise à jour auto toutes les 10s.</small>`;
       document.getElementById('startInfo').innerHTML = `${start.start_place || ''}<br>${startDate.toLocaleString('fr-FR')}`;
-      await refresh();
-  updateNextDestination();
+  await refresh();
+  // Charger la trace à pied (si Firestore activé côté serveur)
+  try { const geo = await fetchWalkingTrack(); updateWalkingLayer(geo); } catch(_){}
       // Si on n'a pas encore pu fitter (pas assez de points) on tente un fit départ + première étape du parcours planifié
       if(!state.initialFitted) {
         const extra = [];
@@ -241,7 +283,8 @@
       }
       // Corriger potentiels glitchs de rendu après animations
       setTimeout(()=> map.invalidateSize(), 400);
-      setInterval(refresh, 30000);
+  // Rafraîchissement plus réactif pour refléter vite les nouveaux points
+  setInterval(refresh, 5000);
       // Twitch status refresh
       async function updateTwitch(){
         try {
@@ -257,7 +300,7 @@
       updateTwitch();
       setInterval(updateTwitch, 60000);
   // Si après 3s le contenu de startInfo n'a pas changé, afficher debug
-  setTimeout(()=>{ if(document.getElementById('startInfo').textContent.includes('Chargement')) { showDebug('Toujours pas de données. Vérifie la règle Render /api rewrite. <br>API_BASE='+(API_BASE||'(relatif)')); } }, 3000);
+  setTimeout(()=>{ /* debug initial désactivé en prod */ }, 3000);
     }
 
     init();
