@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <title>Admin Suivi</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Config front: permet de définir window.API_BASE_OVERRIDE pour pointer vers l'API Render -->
+  <script src="public/config.js"></script>
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 40px; max-width: 760px; }
     form { display:grid; gap:12px; }
@@ -124,7 +126,9 @@
     // Détection dynamique de l'API (même logique que index.html)
     const isLocalNet = /^192\.168\./.test(location.hostname);
     const isDev = isLocalNet || location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.port === '5173';
-    const PROD_API_DOMAIN = 'https://suivi-byilhann-nico-la.onrender.com'; // domaine backend Render
+  // En prod statique, on utilise window.API_BASE_OVERRIDE défini dans public/config.js;
+  // à défaut, chemins relatifs (""), et en dev on cible :4000
+  const PROD_API_DOMAIN = '';
     const API_BASE = (window.API_BASE_OVERRIDE && window.API_BASE_OVERRIDE.trim())
       ? window.API_BASE_OVERRIDE.trim()
       : (isDev ? `${location.protocol}//${location.hostname}:4000` : PROD_API_DOMAIN);
