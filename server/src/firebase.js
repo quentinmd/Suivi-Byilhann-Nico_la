@@ -48,11 +48,16 @@ if (USE_FIRESTORE && !admin.apps.length) {
   if(!cred && filePath){ console.warn('[Firebase] FIREBASE_SERVICE_ACCOUNT_FILE introuvable ou invalide:', filePath); firebaseDebug.error = 'FILE not found or invalid: ' + filePath; firebaseDebug.path = filePath; }
   }
   try {
-  app = admin.initializeApp({ credential: cred || admin.credential.applicationDefault() });
-  firebaseDebug.initialized = true;
+    if(cred){
+      app = admin.initializeApp({ credential: cred });
+      firebaseDebug.initialized = true;
+    } else {
+      console.warn('[Firebase] Aucun credentials explicite, Firestore non initialisé (pas d\'applicationDefault)');
+      firebaseDebug.error = 'no credentials provided';
+    }
   } catch(e) {
-  console.warn('[Firebase] Initialisation ignorée (pas de credentials valides):', e.message);
-  firebaseDebug.error = 'init failed: ' + e.message;
+    console.warn('[Firebase] Initialisation ignorée (pas de credentials valides):', e.message);
+    firebaseDebug.error = 'init failed: ' + e.message;
   }
 }
 export const firestore = USE_FIRESTORE && admin.apps.length ? admin.firestore() : {};
