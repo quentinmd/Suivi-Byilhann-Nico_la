@@ -98,7 +98,13 @@
   async function fetchWalkingTrack(){
     const base = `${API_BASE}/api/walking-track?full=1&t=${Date.now()}`;
     // En dev local, on force SQLite; en prod (Render), on laisse Firestore si activé côté serveur
-    return safeFetchJson(isDev ? (base + '&source=sqlite') : base);
+    const firstUrl = isDev ? (base + '&source=sqlite') : base;
+    const fc = await safeFetchJson(firstUrl);
+    // Fallback: si la collection Firestore est vide côté API, retente en SQLite pour garantir un tracé
+    if(!fc || !Array.isArray(fc.features) || fc.features.length === 0){
+      try { return await safeFetchJson(base + '&source=sqlite'); } catch(_) { /* garde fc brut */ }
+    }
+    return fc;
   }
 
     function updateMap() {
