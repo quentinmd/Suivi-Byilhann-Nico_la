@@ -93,7 +93,11 @@
     async function fetchStart() { return safeFetchJson(`${API_BASE}/api/start?t=${Date.now()}`); }
     async function fetchPositions() { return safeFetchJson(`${API_BASE}/api/positions?t=${Date.now()}`); }
     async function fetchRoute() { return safeFetchJson(`${API_BASE}/api/route?t=${Date.now()}`); }
-  async function fetchWalkingTrack(){ return safeFetchJson(`${API_BASE}/api/walking-track?source=sqlite&full=1&t=${Date.now()}`); }
+  async function fetchWalkingTrack(){
+    const base = `${API_BASE}/api/walking-track?full=1&t=${Date.now()}`;
+    // En dev local, on force SQLite; en prod (Render), on laisse Firestore si activé côté serveur
+    return safeFetchJson(isDev ? (base + '&source=sqlite') : base);
+  }
 
     function updateMap() {
       // Parcours planifié (gris pointillé)
