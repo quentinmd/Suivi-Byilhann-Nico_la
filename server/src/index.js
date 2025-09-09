@@ -485,6 +485,32 @@ app.get('/api/walking-track', async (req,res)=>{
       try { posColl = posColl.orderBy('created_at_ts','asc'); } catch { posColl = posColl.orderBy('created_at','asc'); }
       const posSnap = await posColl.get();
       const rows = posSnap.docs.map(d=> ({ id: d.id, lat: d.get('lat'), lng: d.get('lng') }));
+      // Si Firestore n'a pas assez de points pour tracer (0 ou 1), bascule immédiatement sur SQLite
+      if(rows.length < 2){
+        const sqlRows = await all('SELECT id, lat, lng FROM positions ORDER BY id ASC');
+        const fc = { type:'FeatureCollection', features: [] };
+        if(sqlRows.length >= 2){
+          // Ajouter le départ si défini
+          try {
+            const meta = await all('SELECT key,value FROM meta WHERE key IN ("start_lat","start_lng")');
+            const obj = Object.fromEntries(meta.map(r=> [r.key, r.value]));
+            const sLat = obj.start_lat != null ? parseFloat(obj.start_lat) : null;
+            const sLng = obj.start_lng != null ? parseFloat(obj.start_lng) : null;
+            if(Number.isFinite(sLat) && Number.isFinite(sLng)){
+              const first = sqlRows[0];
+              const dist0 = haversineKm(sLat, sLng, first.lat, first.lng);
+              if(!(dist0 < 0.01)) sqlRows.unshift({ id: '__START__', lat: sLat, lng: sLng });
+            }
+          } catch(_){ }
+          for(let i=1;i<sqlRows.length;i++){
+            const prev = sqlRows[i-1], curr = sqlRows[i];
+            if([prev,curr].some(p=> p==null || p.lat==null || p.lng==null)) continue;
+            const distance_km = haversineKm(prev.lat, prev.lng, curr.lat, curr.lng);
+            fc.features.push({ type:'Feature', properties:{ fromId: prev.id, toId: curr.id, distance_km, duration_min: null, source:'straight' }, geometry:{ type:'LineString', coordinates:[[prev.lng,prev.lat],[curr.lng,curr.lat]] } });
+          }
+        }
+        return res.json(fc);
+      }
       // Insérer le point de départ s'il existe (tiré de SQLite meta)
       try {
         const meta = await all('SELECT key,value FROM meta WHERE key IN ("start_lat","start_lng")');
