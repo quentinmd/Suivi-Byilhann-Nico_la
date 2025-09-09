@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import admin from 'firebase-admin';
 import fs from 'fs';
 import path from 'path';
