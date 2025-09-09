@@ -34,6 +34,14 @@
   </form>
 
   <div id="secured" style="display:none">
+    <section style="margin-bottom:20px;border:1px solid #ccc;padding:12px">
+      <h2>Maintenance (Firestore)</h2>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="btnMigrate" type="button">Migrer positions SQLite → Firestore</button>
+        <button id="btnRebuildSeg" type="button" style="background:#0d5c28">Recalculer segments à pied</button>
+      </div>
+      <div id="maintStatus" style="margin-top:8px;font-size:13px;color:#333"></div>
+    </section>
     <form id="posForm">
       <fieldset style="border:1px solid #ccc;padding:12px">
         <legend>Ajouter position (coordonnées + date/heure)</legend>
@@ -60,7 +68,8 @@
             <input type="text" name="time" placeholder="16:15" />
           </label>
         </div>
-        <button type="submit">Enregistrer coordonnées</button>
+  <div style="font-size:12px;color:#666;margin-top:-6px;margin-bottom:4px">Si date/heure vides: timestamp actuel (Europe/Paris) auto.</div>
+  <button type="submit">Enregistrer coordonnées</button>
       </fieldset>
     </form>
 
@@ -263,6 +272,26 @@
       const check = () => { if(adminCodeInput.value){ loadPositionsList(); } else setTimeout(check, 600); };
       check();
     })();
+
+    // Maintenance buttons
+    document.getElementById('btnMigrate').addEventListener('click', async ()=>{
+      const el = document.getElementById('maintStatus'); el.textContent = 'Migration en cours...';
+      try {
+        const r = await fetch(`${API_BASE}/api/migrate/sqlite-to-firestore`, { method:'POST', headers: headers() });
+        const j = await r.json();
+        if(!r.ok) throw new Error(j.error||'Erreur migration');
+        el.textContent = `Migration terminée: copiés=${j.copied||0}, ignorés=${j.skipped||0}`;
+      } catch(e){ el.textContent = 'Erreur migration: '+e.message; }
+    });
+    document.getElementById('btnRebuildSeg').addEventListener('click', async ()=>{
+      const el = document.getElementById('maintStatus'); el.textContent = 'Reconstruction des segments...';
+      try {
+        const r = await fetch(`${API_BASE}/api/walking-segments/rebuild`, { method:'POST', headers: headers() });
+        const j = await r.json();
+        if(!r.ok) throw new Error(j.error||'Erreur rebuild');
+        el.textContent = `Segments: créés=${j.created||0}, ignorés=${j.skipped||0}, échecs=${j.failed||0}`;
+      } catch(e){ el.textContent = 'Erreur rebuild: '+e.message; }
+    });
 
     // Ajout rapide lat,lng
     document.getElementById('quickBtn').addEventListener('click', async () => {
