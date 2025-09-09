@@ -718,6 +718,20 @@ app.get('/api/_debug/firebase-status', (req,res)=>{
   res.json(firebaseDebug);
 });
 
+// Debug: flags d'environnement sans exposer de secrets
+app.get('/api/_debug/env-flags', (req,res)=>{
+  const uf = process.env.USE_FIRESTORE;
+  const hasJson = !!process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  const fileVar = process.env.FIREBASE_SERVICE_ACCOUNT_FILE || '';
+  res.json({
+    USE_FIRESTORE_env: uf ?? null,
+    USE_FIRESTORE_parsed: (typeof uf === 'string' ? uf.toLowerCase() === 'true' : false),
+    has_JSON_env: hasJson,
+    has_FILE_env: !!fileVar,
+    file_env_value_hint: fileVar ? (fileVar.startsWith('/etc/secrets/') ? 'etc-secrets-path' : 'custom-path') : null
+  });
+});
+
 // Debug: lister les positions SQLite même si USE_FIRESTORE=true
 app.get('/api/_debug/sqlite-positions', checkAdmin, async (req,res)=>{
   try {
