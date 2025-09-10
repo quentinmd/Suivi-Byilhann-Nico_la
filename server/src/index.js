@@ -108,6 +108,37 @@ function haversineKm(lat1, lon1, lat2, lon2){
 }
 const WALKING_AVOID_PAVED = (process.env.WALKING_AVOID_PAVED || 'true').toLowerCase() === 'true';
 
+// ---- Normalisation de dates (Europe/Paris) ----
+function ensureParisISOFromAny(input){
+  try {
+    if(!input || typeof input !== 'string') return null;
+    const s = input.trim();
+    // Cas déjà ISO avec timezone (Z ou +hh:mm)
+    if(/T/.test(s) && /(Z|[+-][0-9]{2}:[0-9]{2})$/.test(s)) return s;
+    // Extraire composantes Y-M-D H:M(:S)?
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?$/);
+    if(m){
+      const [_, y, mo, d, hh, mm, ss] = m; // eslint-disable-line no-unused-vars
+      const sec = ss || '00';
+      const offset = parisOffsetForDate(`${y}-${mo}-${d}`);
+      return `${y}-${mo}-${d}T${hh}:${mm}:${sec}${offset}`;
+    }
+    // Dernier recours: laisser le parseur Date gérer, puis re-émettre en ISO local Paris
+    const dt = new Date(s);
+    if(!isNaN(dt.getTime())){
+      const y = dt.getUTCFullYear();
+      const mo = String(dt.getUTCMonth()+1).padStart(2,'0');
+      const d = String(dt.getUTCDate()).padStart(2,'0');
+      const hh = String(dt.getUTCHours()).padStart(2,'0');
+      const mm = String(dt.getUTCMinutes()).padStart(2,'0');
+      const ss = String(dt.getUTCSeconds()).padStart(2,'0');
+      const offset = parisOffsetForDate(`${y}-${mo}-${d}`);
+      return `${y}-${mo}-${d}T${hh}:${mm}:${ss}${offset}`;
+    }
+    return null;
+  } catch { return null; }
+}
+
 async function getWalkingRoute(aLat,aLng,bLat,bLng, opts={}){
   const timeoutMs = typeof opts.timeoutMs === 'number' ? opts.timeoutMs : 9000;
   if(ORS_KEY){
@@ -717,6 +748,33 @@ app.post('/api/migrate/sqlite-to-firestore', checkAdmin, async (req,res)=>{
       copied++;
     }
     res.json({ok:true, copied, skipped});
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+// Normaliser les dates Firestore: uniformiser created_at en ISO Europe/Paris et garantir created_at_ts
+app.post('/api/admin/normalize-firestore-dates', checkAdmin, async (req,res)=>{
+  try {
+    if(!isFirestoreReady()) return res.status(400).json({error:'Firestore non prêt'});
+    let coll = firestore.collection('positions');
+    // On parcourt par pages pour éviter de gros reads (ici simple, dataset petit)
+    let fixed=0, skipped=0, failed=0;
+    const snap = await coll.get();
+    for(const doc of snap.docs){
+      try {
+        const data = doc.data();
+        const curCreated = data.created_at;
+        const norm = ensureParisISOFromAny(curCreated) || buildParisISO();
+  const hasTs = !!(data.created_at_ts && typeof data.created_at_ts.toDate === 'function');
+        const update = {};
+  if(curCreated !== norm) update.created_at = norm;
+  // Toujours écraser en Timestamp pour garantir un type homogène (corrige les strings)
+  update.created_at_ts = makeTimestamp(norm);
+        if(Object.keys(update).length === 0){ skipped++; continue; }
+        await firestore.collection('positions').doc(doc.id).set(update, { merge:true });
+        fixed++;
+      } catch(e){ failed++; }
+    }
+    res.json({ok:true, fixed, skipped, failed, total: (await coll.get()).size});
   } catch(e){ res.status(500).json({error:e.message}); }
 });
 
