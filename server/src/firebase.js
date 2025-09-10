@@ -30,8 +30,12 @@ if (USE_FIRESTORE && !admin.apps.length) {
     const candidatePaths = [];
     if (filePath) candidatePaths.push(filePath);
     // Fallbacks: chemin relatif courant et parent
-    candidatePaths.push(path.resolve(process.cwd(), 'suivi-byilhann-nicola-firebase-adminsdk-fbsvc-abd7f4cd1f.json'));
-    candidatePaths.push(path.resolve(process.cwd(), '..', 'suivi-byilhann-nicola-firebase-adminsdk-fbsvc-abd7f4cd1f.json'));
+  // Ancien nom connu
+  candidatePaths.push(path.resolve(process.cwd(), 'suivi-byilhann-nicola-firebase-adminsdk-fbsvc-abd7f4cd1f.json'));
+  candidatePaths.push(path.resolve(process.cwd(), '..', 'suivi-byilhann-nicola-firebase-adminsdk-fbsvc-abd7f4cd1f.json'));
+  // Nouveau nom fourni (V2)
+  candidatePaths.push(path.resolve(process.cwd(), 'suivi-byilhann-nicola-firebase-adminsdk-fbsvc-bdcbb98ed0V2.json'));
+  candidatePaths.push(path.resolve(process.cwd(), '..', 'suivi-byilhann-nicola-firebase-adminsdk-fbsvc-bdcbb98ed0V2.json'));
     for (const p of candidatePaths){
       try {
         if(!p) continue;
