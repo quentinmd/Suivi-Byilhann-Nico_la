@@ -41,6 +41,7 @@
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button id="btnMigrate" type="button">Migrer positions SQLite → Firestore</button>
         <button id="btnRebuildSeg" type="button" style="background:#0d5c28">Recalculer segments à pied</button>
+  <button id="btnFsToSqlite" type="button" style="background:#6c757d">Copier Firestore → SQLite</button>
       </div>
       <div id="maintStatus" style="margin-top:8px;font-size:13px;color:#333"></div>
     </section>
@@ -295,6 +296,17 @@
         if(!r.ok) throw new Error(j.error||'Erreur rebuild');
         el.textContent = `Segments: créés=${j.created||0}, ignorés=${j.skipped||0}, échecs=${j.failed||0}`;
       } catch(e){ el.textContent = 'Erreur rebuild: '+e.message; }
+    });
+
+    // Firestore -> SQLite
+    document.getElementById('btnFsToSqlite').addEventListener('click', async ()=>{
+      const el = document.getElementById('maintStatus'); el.textContent = 'Copie Firestore → SQLite...';
+      try {
+        const r = await fetch(`${API_BASE}/api/migrate/firestore-to-sqlite`, { method:'POST', headers: headers() });
+        const j = await r.json();
+        if(!r.ok) throw new Error(j.error||'Erreur migration FS→SQL');
+        el.textContent = `Copie terminée: insérés=${j.inserted||0}, ignorés=${j.skipped||0}, échecs=${j.failed||0}`;
+      } catch(e){ el.textContent = 'Erreur FS→SQL: '+e.message; }
     });
 
     // Ajout rapide lat,lng
