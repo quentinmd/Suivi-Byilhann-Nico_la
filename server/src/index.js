@@ -579,7 +579,7 @@ app.get('/api/walking-track', async (req,res)=>{
       return res.json({ type:'FeatureCollection', features });
   }
   // Mode SQLite explicite ou fallback: construire la trace à partir des positions SQLite (consécutives)
-    const rows = await all('SELECT id, lat, lng FROM positions ORDER BY id ASC');
+  const rows = await all('SELECT id, lat, lng FROM positions ORDER BY created_at ASC, id ASC');
     // Ajouter le départ en tête s'il est défini
     try {
       const meta = await all('SELECT key,value FROM meta WHERE key IN ("start_lat","start_lng")');
@@ -717,6 +717,30 @@ app.post('/api/migrate/sqlite-to-firestore', checkAdmin, async (req,res)=>{
       copied++;
     }
     res.json({ok:true, copied, skipped});
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+// Migration inverse: copier les positions Firestore -> SQLite (pour synchroniser la base locale)
+app.post('/api/migrate/firestore-to-sqlite', checkAdmin, async (req,res)=>{
+  try {
+    if(!isFirestoreReady()) return res.status(400).json({error:'Firestore non prêt'});
+    let coll = firestore.collection('positions');
+    try { coll = coll.orderBy('created_at_ts','asc'); } catch { coll = coll.orderBy('created_at','asc'); }
+    const snap = await coll.get();
+    const docs = snap.docs.map(d=> ({ id: d.id, ...d.data() }));
+    let inserted=0, skipped=0, failed=0;
+    for(const p of docs){
+      try {
+        const lat = Number(p.lat), lng = Number(p.lng);
+        const created = p.created_at || new Date().toISOString();
+        // Dédupliquer par (created_at, lat, lng) ~exact pour nos données
+        const existing = await get('SELECT id FROM positions WHERE created_at=? AND ABS(lat-?)<1e-6 AND ABS(lng-?)<1e-6', [created, lat, lng]);
+        if(existing){ skipped++; continue; }
+        await run('INSERT INTO positions(streamer,lat,lng,created_at) VALUES (?,?,?,?)', [p.streamer||'Team', lat, lng, created]);
+        inserted++;
+      } catch(e){ failed++; }
+    }
+    res.json({ok:true, inserted, skipped, failed, total: docs.length});
   } catch(e){ res.status(500).json({error:e.message}); }
 });
 
