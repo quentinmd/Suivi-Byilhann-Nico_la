@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 
 const USE_FIRESTORE = (process.env.USE_FIRESTORE || '').toLowerCase() === 'true';
-export const firebaseDebug = { useFirestore: USE_FIRESTORE, method: null, path: null, error: null, initialized: false };
+export const firebaseDebug = { useFirestore: USE_FIRESTORE, method: null, path: null, error: null, initialized: false, projectId: null, clientEmail: null };
 
 let app;
 if (USE_FIRESTORE && !admin.apps.length) {
@@ -18,8 +18,10 @@ if (USE_FIRESTORE && !admin.apps.length) {
       if (parsed.private_key && parsed.private_key.includes('\\n')) {
         parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
       }
-  cred = admin.credential.cert(parsed);
-  firebaseDebug.method = 'json';
+      cred = admin.credential.cert(parsed);
+      firebaseDebug.method = 'json';
+      firebaseDebug.projectId = parsed.project_id || null;
+      firebaseDebug.clientEmail = parsed.client_email || null;
     } catch (e) {
   console.warn('[Firebase] FIREBASE_SERVICE_ACCOUNT_JSON invalide:', e.message);
   firebaseDebug.error = 'JSON parse error: ' + e.message;
@@ -34,14 +36,16 @@ if (USE_FIRESTORE && !admin.apps.length) {
       try {
         if(!p) continue;
         const txt = fs.readFileSync(p, 'utf8');
-        const parsed = JSON.parse(txt);
+  const parsed = JSON.parse(txt);
         if (parsed.private_key && parsed.private_key.includes('\\n')) {
           parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
         }
-    cred = admin.credential.cert(parsed);
-    console.log('[Firebase] Credentials chargés depuis', p);
-    firebaseDebug.method = 'file';
-    firebaseDebug.path = p;
+  cred = admin.credential.cert(parsed);
+  console.log('[Firebase] Credentials chargés depuis', p);
+  firebaseDebug.method = 'file';
+  firebaseDebug.path = p;
+  firebaseDebug.projectId = parsed.project_id || null;
+  firebaseDebug.clientEmail = parsed.client_email || null;
         break;
       } catch(e){ /* essayer suivant */ }
     }
