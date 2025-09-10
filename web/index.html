@@ -80,7 +80,7 @@
       attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-  const state = { positions: [], route: [], marker: null, plannedLine: null, startMarker: null, lastCount: 0, initialFitted: false, startTime: null, totalKm: 0, walkingLayer: null, walkingKmTotal: 0, walkingFitted: false, startLat:null, startLng:null, startConnector:null, startConnectorKm:0 };
+  const state = { positions: [], route: [], marker: null, plannedLine: null, startMarker: null, lastCount: 0, initialFitted: false, startTime: null, totalKm: 0, walkingLayer: null, walkingKmTotal: 0, walkingFitted: false, startLat:null, startLng:null, startConnector:null, startConnectorKm:0, csvLine:null };
   const MAJOR_CITIES = new Set([
     'Montpellier (Radisson Blu)','Nîmes','Avignon','Orange','Montélimar','Valence','Vienne','Lyon','Mâcon','Chalon-sur-Saône','Beaune','Dijon','Sens','Fontainebleau','Melun','Paris (Arrivée)'
   ]);
@@ -93,7 +93,25 @@
   try { return JSON.parse(txt); } catch(e){ console.error('Réponse non JSON:', {url,status:res.status, ct, bodyPreview: txt.slice(0,200)}); showDebug('Réponse non JSON pour '+url+'<br>Status '+res.status); throw e; }
     }
     async function fetchStart() { return safeFetchJson(`${API_BASE}/api/start?t=${Date.now()}`); }
-    async function fetchPositions() { return safeFetchJson(`${API_BASE}/api/positions?t=${Date.now()}`); }
+    async function fetchPositionsCsv() {
+      // Lire le CSV brut, puis parser en objets
+      const url = `${API_BASE}/data/positions.csv?t=${Date.now()}`;
+      const res = await fetch(url, {headers:{'Accept':'text/csv'}});
+      const txt = await res.text();
+      const lines = txt.split(/\r?\n/).filter(Boolean);
+      if(!lines.length) return [];
+      const header = lines.shift();
+      const out = [];
+      for(const line of lines){
+        const parts = (function parseCsvLine(line){
+          const out=[]; let cur=''; let inQ=false; for(let i=0;i<line.length;i++){ const ch=line[i]; if(inQ){ if(ch==='"'){ if(line[i+1]==='"'){ cur+='"'; i++; } else { inQ=false; } } else { cur+=ch; } } else { if(ch==='"'){ inQ=true; } else if(ch===','){ out.push(cur); cur=''; } else { cur+=ch; } } } out.push(cur); return out; })(line);
+        if(parts.length < 5) continue;
+        const [id, created_at, lat, lng, streamer] = parts;
+        out.push({ id, created_at, lat: Number(lat), lng: Number(lng), streamer });
+      }
+      out.sort((a,b)=> String(a.created_at).localeCompare(String(b.created_at)) || String(a.id).localeCompare(String(b.id)) );
+      return out;
+    }
     async function fetchRoute() { return safeFetchJson(`${API_BASE}/api/route?t=${Date.now()}`); }
   async function fetchWalkingTrack(){
     const base = `${API_BASE}/api/walking-track?full=1&t=${Date.now()}`;
@@ -117,8 +135,13 @@
           state.plannedLine.setLatLngs(plannedLatLngs);
         }
       }
-      // Marqueur sur la dernière position (sans tracer la ligne rouge)
+      // Tracer la ligne à partir du CSV (segments droits)
       const latlngs = state.positions.map(p=>[p.lat,p.lng]);
+      if(latlngs.length >= 2){
+        if(!state.csvLine){ state.csvLine = L.polyline(latlngs, { color:'#e63946', weight:3, opacity:0.8, pane:'walking' }).addTo(map); }
+        else { state.csvLine.setLatLngs(latlngs); }
+      }
+      // Marqueur sur la dernière position
       if(latlngs.length) {
         const last = latlngs[latlngs.length-1];
         if(!state.marker) {
@@ -231,7 +254,7 @@
     }
     async function refresh() {
       try {
-        const data = await fetchPositions();
+        const data = await fetchPositionsCsv();
         const grew = data.length > state.lastCount;
         state.positions = data;
         state.lastCount = data.length;
