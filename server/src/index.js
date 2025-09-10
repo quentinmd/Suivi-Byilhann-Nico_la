@@ -6,6 +6,7 @@ import 'dotenv/config';
 import { firestore, makeTimestamp, firebaseDebug } from './firebase.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
 
 const app = express();
 app.use(cors());
@@ -20,6 +21,11 @@ app.use(express.static(webDir, { extensions: ['html'] }));
 app.get('/', (req,res)=> res.sendFile(path.join(webDir, 'index.html')));
 app.get('/admin', (req,res)=> res.sendFile(path.join(webDir, 'admin.html')));
 app.get('/healthz', (req,res)=> res.json({ ok:true }));
+
+// Exposer les fichiers de données (CSV) pour lecture par le front
+const dataDir = path.resolve(__dirname, '../../data');
+try { fs.mkdirSync(dataDir, { recursive: true }); } catch(_){}
+app.use('/data', express.static(dataDir));
 
 // Override éventuel du code admin via variable d'environnement
 if(process.env.ADMIN_CODE) {
@@ -313,6 +319,25 @@ async function checkAdmin(req,res,next){
   } catch(e){ res.status(500).json({error:e.message}); }
 }
 
+// ---- CSV helpers ----
+const CSV_PATH = path.join(dataDir, 'positions.csv');
+function ensureCsvHeader(){
+  try {
+    if(!fs.existsSync(CSV_PATH)){
+      fs.writeFileSync(CSV_PATH, 'id,created_at,lat,lng,streamer\n', 'utf8');
+    } else {
+      // Si fichier existe mais vide, écrire l'entête
+      const stat = fs.statSync(CSV_PATH);
+      if(stat.size === 0){ fs.writeFileSync(CSV_PATH, 'id,created_at,lat,lng,streamer\n', 'utf8'); }
+    }
+  } catch(e){ /* ignore */ }
+}
+function csvSafe(val){
+  const s = String(val==null? '': val);
+  if(/[",\n]/.test(s)) return '"'+s.replace(/"/g,'""')+'"';
+  return s;
+}
+
 // ---- Endpoints ----
 app.get('/api/start', async (req,res)=> {
   try {
@@ -352,6 +377,26 @@ app.get('/api/positions', async (req,res)=> {
   } catch(e){ res.status(500).json({error:e.message}); }
 });
 
+// Nouveau: liste les positions à partir du CSV (pour le front qui veut le CSV brut JSONifié)
+app.get('/api/positions.csv.json', async (req,res)=>{
+  try {
+    ensureCsvHeader();
+    const txt = fs.readFileSync(CSV_PATH, 'utf8');
+    const lines = txt.split(/\r?\n/).filter(Boolean);
+    const header = lines.shift();
+    const out = [];
+    for(const line of lines){
+      const parts = parseCsvLine(line);
+      if(parts.length < 5) continue;
+      const [id, created_at, lat, lng, streamer] = parts;
+      out.push({ id, created_at, lat: Number(lat), lng: Number(lng), streamer });
+    }
+    // Trier par created_at si possible, sinon garder l'ordre du fichier
+    out.sort((a,b)=> String(a.created_at).localeCompare(String(b.created_at)) || String(a.id).localeCompare(String(b.id)) );
+    res.json(out);
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
 app.post('/api/positions', checkAdmin, async (req,res)=> {
   try {
     const {lat,lng,date,time} = req.body;
@@ -381,6 +426,108 @@ app.post('/api/positions', checkAdmin, async (req,res)=> {
     res.json({ok:true, created_at: createdAt});
   } catch(e){ res.status(500).json({error:e.message}); }
 });
+
+// Nouveau: ajout dans CSV (préférence si vous voulez vous passer de Firestore/SQLite)
+app.post('/api/positions-csv', checkAdmin, async (req,res)=>{
+  try {
+    const { lat, lng, created_at, date, time, id } = req.body;
+    const nlat = Number(lat), nlng = Number(lng);
+    if(!Number.isFinite(nlat) || !Number.isFinite(nlng)) return res.status(400).json({error:'lat/lng requis'});
+    let ts = created_at;
+    if(!ts){
+      if(date || time){
+        if(time && /^[0-9]{2}:[0-9]{2}$/.test(String(time))) ts = buildParisISO(date, time);
+        else if(date && !time) ts = buildParisISO(date, null);
+        else if(time && /T/.test(String(time))) ts = time;
+      }
+      if(!ts) ts = buildParisISO();
+    }
+    // id automatique: timestamp + random si non fourni
+    const rid = id || Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+    ensureCsvHeader();
+    const line = [csvSafe(rid), csvSafe(ts), csvSafe(nlat), csvSafe(nlng), csvSafe('Team')].join(',') + '\n';
+    fs.appendFileSync(CSV_PATH, line, 'utf8');
+    return res.json({ ok:true, id: rid, created_at: ts });
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+app.post('/api/positions-csv/update', checkAdmin, async (req,res)=>{
+  try {
+    const { id, lat, lng, date, time } = req.body || {};
+    if(!id) return res.status(400).json({error:'id requis'});
+    ensureCsvHeader();
+    const txt = fs.readFileSync(CSV_PATH, 'utf8');
+    const lines = txt.split(/\r?\n/);
+    const header = lines.shift();
+    const out = [header];
+    let changed = false;
+    for(const line of lines){
+      if(!line) continue;
+      const parts = parseCsvLine(line);
+      if(parts[0] === String(id)){
+        let created = parts[1];
+        const oldLat = Number(parts[2]);
+        const oldLng = Number(parts[3]);
+        const nlat = lat!=null && lat!=='' ? Number(lat) : oldLat;
+        const nlng = lng!=null && lng!=='' ? Number(lng) : oldLng;
+        if(date || time){
+          // recomposer created_at
+          if(time && /^[0-9]{2}:[0-9]{2}$/.test(String(time))) created = buildParisISO(date || (created?created.slice(0,10):null), time);
+          else if(date && !time){ const oldT = created? created.slice(11,16) : null; created = buildParisISO(date, oldT); }
+          else if(time && /T/.test(String(time))){ created = time; }
+        }
+        out.push([csvSafe(id), csvSafe(created), csvSafe(nlat), csvSafe(nlng), csvSafe(parts[4]||'Team')].join(','));
+        changed = true;
+      } else {
+        out.push(line);
+      }
+    }
+    fs.writeFileSync(CSV_PATH, out.join('\n').replace(/\n+$/,'\n'), 'utf8');
+    res.json({ ok:true, changed });
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+app.post('/api/positions-csv/delete', checkAdmin, async (req,res)=>{
+  try {
+    const { id } = req.body || {};
+    if(!id) return res.status(400).json({error:'id requis'});
+    ensureCsvHeader();
+    const txt = fs.readFileSync(CSV_PATH, 'utf8');
+    const lines = txt.split(/\r?\n/);
+    const header = lines.shift();
+    const keep = [header];
+    let removed = 0;
+    for(const line of lines){
+      if(!line) continue;
+      const parts = parseCsvLine(line);
+      if(parts[0] === String(id)) { removed++; continue; }
+      keep.push(line);
+    }
+    fs.writeFileSync(CSV_PATH, keep.join('\n').replace(/\n+$/,'\n'), 'utf8');
+    res.json({ ok:true, removed });
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+function parseCsvLine(line){
+  // Simple CSV parser for comma + quotes
+  const out = [];
+  let cur = ''; let inQ = false;
+  for(let i=0;i<line.length;i++){
+    const ch = line[i];
+    if(inQ){
+      if(ch==='"'){
+        if(line[i+1]==='"'){ cur+='"'; i++; }
+        else { inQ=false; }
+      } else { cur+=ch; }
+    } else {
+      if(ch==='"'){ inQ=true; }
+      else if(ch===','){ out.push(cur); cur=''; }
+      else { cur+=ch; }
+    }
+  }
+  out.push(cur);
+  return out;
+}
 
 app.get('/api/positions/quick', checkAdmin, async (req,res)=> {
   try {
@@ -495,6 +642,24 @@ app.post('/api/positions/by-place', checkAdmin, async (req,res)=> {
 app.get('/api/route', async (req,res)=> {
   try { res.json(await all('SELECT * FROM route ORDER BY seq ASC')); }
   catch(e){ res.status(500).json({error:e.message}); }
+});
+
+// Ajout/MAJ heure d'arrivée d'une étape (utilisé par admin.html)
+app.post('/api/route/arrival', checkAdmin, async (req,res)=>{
+  try {
+    const { name, time } = req.body || {};
+    if(!name || !time) return res.status(400).json({error:'name et time requis'});
+    const row = await get('SELECT id FROM route WHERE LOWER(name)=LOWER(?)', [name]);
+    if(!row) return res.status(404).json({error:'Lieu inconnu'});
+    // time peut être HH:MM ou ISO; si HH:MM on compose avec la date de start
+    let iso = time;
+    if(/^\d{2}:\d{2}$/.test(String(time))){
+      // Utiliser la date du jour (Europe/Paris)
+      iso = buildParisISO(null, time);
+    }
+    await run('UPDATE route SET arrival_time=? WHERE id=?', [iso, row.id]);
+    res.json({ ok:true, id: row.id, arrival_time: iso });
+  } catch(e){ res.status(500).json({error:e.message}); }
 });
 
 // Walking track combiné (GeoJSON FeatureCollection) basé sur segments Firestore
@@ -684,6 +849,39 @@ app.get('/api/walking-track', async (req,res)=>{
     features.reverse();
     return res.json({ type:'FeatureCollection', features });
   } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+// Reconstruire les segments à pied (noop si Firestore off) — pour compat avec admin.html
+app.post('/api/walking-segments/rebuild', checkAdmin, async (req,res)=>{
+  try {
+    if(!isFirestoreReady()) return res.json({ok:true, created:0, skipped:0, failed:0, note:'Firestore inactif'});
+    // recompute segments for all consecutive Firestore positions
+    let coll = firestore.collection('positions');
+    try { coll = coll.orderBy('created_at_ts','asc'); } catch { coll = coll.orderBy('created_at','asc'); }
+    const snap = await coll.get();
+    const rows = snap.docs.map(d=> ({ id: d.id, lat: d.get('lat'), lng: d.get('lng') }));
+    let created=0, skipped=0, failed=0;
+    for(let i=1;i<rows.length;i++){
+      const prev = rows[i-1]; const curr = rows[i];
+      const segId = `${prev.id}__${curr.id}`;
+      try {
+        const exists = await firestore.collection('segments').doc(segId).get();
+        if(exists.exists){ skipped++; continue; }
+        const route = await getWalkingRoute(prev.lat, prev.lng, curr.lat, curr.lng);
+        await firestore.collection('segments').doc(segId).set({
+          fromId: prev.id, toId: curr.id, geometry: route.geometry, distance_km: route.distance_km, duration_min: route.duration_min, created_at: new Date().toISOString(), source: route.source
+        });
+        created++;
+      } catch(e){ failed++; }
+    }
+    res.json({ok:true, created, skipped, failed});
+  } catch(e){ res.status(500).json({error:e.message}); }
+});
+
+// Twitch status (utilisé par index.html)
+app.get('/api/twitch-status', async (req,res)=>{
+  try { res.json(await fetchTwitchStatus()); }
+  catch(e){ res.status(500).json({error:e.message}); }
 });
 
 // Itinéraire à pied entre deux points (préférence ORS, fallback OSRM public)
