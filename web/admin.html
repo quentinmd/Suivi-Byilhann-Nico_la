@@ -183,14 +183,15 @@
       }
     });
 
-    form.addEventListener('submit', async (e) => {
+  form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const data = Object.fromEntries(new FormData(form).entries());
       if(!data.lat || !data.lng) { alert('Lat & Lng requis'); return; }
       data.lat = parseFloat(data.lat); data.lng = parseFloat(data.lng);
       const btn = form.querySelector('button'); btn.disabled = true;
       try {
-  const res = await fetch(`${API_BASE}/api/positions`, { method:'POST', headers: headers(), body: JSON.stringify(data) });
+    // On écrit dorénavant dans le CSV côté serveur
+    const res = await fetch(`${API_BASE}/api/positions-csv`, { method:'POST', headers: headers(), body: JSON.stringify(data) });
         const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
         log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Position (coords) OK${j.created_at? ' ('+ j.created_at +')':''}</div>` + log.innerHTML;
         form.reset();
@@ -221,8 +222,16 @@
     });
 
     async function loadPositionsList(){
-  const res = await fetch(`${API_BASE}/api/positions`);
-      const list = await res.json();
+      // Lire le CSV pour rester cohérent avec la carte
+      const res = await fetch(`${API_BASE}/data/positions.csv?t=${Date.now()}`);
+      const txt = await res.text();
+      const lines = txt.split(/\r?\n/).filter(Boolean);
+      if(!lines.length){ posTableBody.innerHTML=''; return; }
+      lines.shift(); // header
+      const list = lines.map(line=>{
+        const parts = (function parseCsvLine(line){ const out=[]; let cur=''; let inQ=false; for(let i=0;i<line.length;i++){ const ch=line[i]; if(inQ){ if(ch==='"'){ if(line[i+1]==='"'){ cur+='"'; i++; } else { inQ=false; } } else { cur+=ch; } } else { if(ch==='"'){ inQ=true; } else if(ch===','){ out.push(cur); cur=''; } else { cur+=ch; } } } out.push(cur); return out; })(line);
+        return { id: parts[0], created_at: parts[1], lat: Number(parts[2]), lng: Number(parts[3]), streamer: parts[4] };
+      }).sort((a,b)=> String(a.created_at).localeCompare(String(b.created_at)) || String(a.id).localeCompare(String(b.id)) );
       posTableBody.innerHTML = list.map(p=>{
         let dateStr = '', timeStr='';
         if(p.created_at) {
@@ -251,13 +260,14 @@
       const tr = btn.closest('tr');
       const id = tr.getAttribute('data-id');
       const action = btn.getAttribute('data-action');
-      if(action === 'delete') {
+    if(action === 'delete') {
         if(!confirm('Supprimer position '+id+' ?')) return;
         try {
-          const res = await fetch(`${API_BASE}/api/positions/${id}`, {method:'DELETE', headers: headers()});
-          const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
-          log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Suppression ID ${id}</div>` + log.innerHTML;
-          tr.remove();
+      // Suppression côté CSV: on réécrit le fichier sans la ligne
+      const res = await fetch(`${API_BASE}/api/positions-csv/delete`, {method:'POST', headers: headers(), body: JSON.stringify({ id })});
+      const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
+      log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Suppression ID ${id} (CSV)</div>` + log.innerHTML;
+      await loadPositionsList();
         } catch(err){ alert(err.message); }
       } else if(action === 'save') {
     const lat = tr.querySelector('input[data-field="lat"]').value.trim();
@@ -266,9 +276,10 @@
     const time = tr.querySelector('input[data-field="time"]').value.trim();
     if(time && !/^\d{2}:\d{2}$/.test(time)) { alert('Heure invalide (HH:MM)'); return; }
         try {
-          const res = await fetch(`${API_BASE}/api/positions/${id}`, {method:'PATCH', headers: headers(), body: JSON.stringify({lat,lng,date,time})});
+          const res = await fetch(`${API_BASE}/api/positions-csv/update`, {method:'POST', headers: headers(), body: JSON.stringify({id, lat, lng, date, time})});
           const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
-          log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Mise à jour ID ${id}</div>` + log.innerHTML;
+          log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] Mise à jour ID ${id} (CSV)</div>` + log.innerHTML;
+          await loadPositionsList();
         } catch(err){ alert(err.message); }
       }
     });
@@ -322,7 +333,7 @@
     });
 
     // Ajout rapide lat,lng
-    document.getElementById('quickBtn').addEventListener('click', async () => {
+  document.getElementById('quickBtn').addEventListener('click', async () => {
       const field = document.getElementById('quickPair');
       const val = field.value.trim();
       if(!val) return;
@@ -331,7 +342,7 @@
       const lat = parseFloat(m[1]);
       const lng = parseFloat(m[2]);
       try {
-  const res = await fetch(`${API_BASE}/api/positions?dummy=${Date.now()}`, { method:'POST', headers: headers(), body: JSON.stringify({lat,lng}) });
+    const res = await fetch(`${API_BASE}/api/positions-csv?dummy=${Date.now()}`, { method:'POST', headers: headers(), body: JSON.stringify({lat,lng}) });
         const j = await res.json(); if(!res.ok) throw new Error(j.error||'Erreur');
         log.innerHTML = `<div>[${new Date().toLocaleTimeString()}] (Rapide) ${lat.toFixed(5)},${lng.toFixed(5)}</div>` + log.innerHTML;
         field.value = '';
