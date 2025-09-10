@@ -819,6 +819,18 @@ app.get('/api/_debug/env-flags', (req,res)=>{
   });
 });
 
+// Debug: ping Firestore (lecture simple) pour exposer l'erreur exacte côté serveur
+app.get('/api/_debug/firestore-ping', async (req,res)=>{
+  try {
+    if(!isFirestoreReady()) return res.status(400).json({ok:false, error:'not-ready'});
+    // Petite lecture qui devrait réussir même sans documents
+    const s = await firestore.collection('positions').limit(1).get();
+    res.json({ ok:true, size: s.size });
+  } catch(e){
+    res.status(500).json({ ok:false, error: e && e.message ? e.message : String(e) });
+  }
+});
+
 // Debug: lister les positions SQLite même si USE_FIRESTORE=true
 app.get('/api/_debug/sqlite-positions', checkAdmin, async (req,res)=>{
   try {
